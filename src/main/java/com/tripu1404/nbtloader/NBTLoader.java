@@ -6,6 +6,7 @@ import cn.nukkit.command.CommandSender;
 import cn.nukkit.item.Item;
 import cn.nukkit.nbt.tag.CompoundTag;
 import cn.nukkit.nbt.tag.ListTag;
+import cn.nukkit.nbt.tag.Tag;
 import cn.nukkit.plugin.PluginBase;
 import cn.nukkit.utils.TextFormat;
 
@@ -25,7 +26,7 @@ public class NBTLoader extends PluginBase {
         if (!nbtFolder.exists()) {
             nbtFolder.mkdirs();
         }
-        getLogger().info(TextFormat.GREEN + "NBTLoader para Kits Avanzados activado (Fix Aire/Shulker Color).");
+        getLogger().info(TextFormat.GREEN + "NBTLoader activado. SNBT Parser optimizado.");
     }
 
     @Override
@@ -83,35 +84,44 @@ public class NBTLoader extends PluginBase {
             @SuppressWarnings("unchecked")
             Map<String, Object> rootMap = (Map<String, Object>) parsedStructure;
 
-            // 1. SOLUCIÓN AL ERROR DE DAR "AIRE": MAPEO POR META (DAÑO) Y NO POR STRING ID
-            int itemId = Item.SHULKER_BOX; // 218 en Nukkit
-            int meta = 0; // Color por defecto
+            // 1. SOLUCIÓN AL FALSO POSITIVO DEL COFRE: Evaluar solo el identificador principal
+            int itemId = Item.SHULKER_BOX; 
+            int meta = 0; 
+            String rootId = "";
 
-            String lowerContent = rawContent.toLowerCase();
-
-            // Detectar si es un cofre o una shulker y aplicar el color vía meta
-            if (lowerContent.contains("minecraft:chest") || lowerContent.contains("name:\"chest\"") || lowerContent.contains("name:chest")) {
-                itemId = Item.CHEST; // 54 en Nukkit
-            } else {
-                if (lowerContent.contains("color:\"white\"") || lowerContent.contains("color:white")) meta = 0;
-                else if (lowerContent.contains("color:\"orange\"") || lowerContent.contains("color:orange")) meta = 1;
-                else if (lowerContent.contains("color:\"magenta\"") || lowerContent.contains("color:magenta")) meta = 2;
-                else if (lowerContent.contains("color:\"light_blue\"") || lowerContent.contains("color:light_blue")) meta = 3;
-                else if (lowerContent.contains("color:\"yellow\"") || lowerContent.contains("color:yellow")) meta = 4;
-                else if (lowerContent.contains("color:\"lime\"") || lowerContent.contains("color:lime")) meta = 5;
-                else if (lowerContent.contains("color:\"pink\"") || lowerContent.contains("color:pink")) meta = 6;
-                else if (lowerContent.contains("color:\"gray\"") || lowerContent.contains("color:gray")) meta = 7;
-                else if (lowerContent.contains("color:\"silver\"") || lowerContent.contains("color:silver") || lowerContent.contains("color:light_gray")) meta = 8;
-                else if (lowerContent.contains("color:\"cyan\"") || lowerContent.contains("color:cyan")) meta = 9;
-                else if (lowerContent.contains("color:\"purple\"") || lowerContent.contains("color:purple")) meta = 10;
-                else if (lowerContent.contains("color:\"blue\"") || lowerContent.contains("color:blue")) meta = 11;
-                else if (lowerContent.contains("color:\"brown\"") || lowerContent.contains("color:brown")) meta = 12;
-                else if (lowerContent.contains("color:\"green\"") || lowerContent.contains("color:green")) meta = 13;
-                else if (lowerContent.contains("color:\"red\"") || lowerContent.contains("color:red")) meta = 14;
-                else if (lowerContent.contains("color:\"black\"") || lowerContent.contains("color:black")) meta = 15;
+            if (rootMap.containsKey("id")) {
+                rootId = String.valueOf(rootMap.get("id")).toLowerCase();
+            } else if (rootMap.containsKey("Block")) {
+                Object blockObj = rootMap.get("Block");
+                if (blockObj instanceof Map) {
+                    Map<?, ?> blockMap = (Map<?, ?>) blockObj;
+                    if (blockMap.containsKey("name")) {
+                        rootId = String.valueOf(blockMap.get("name")).toLowerCase();
+                    }
+                    if (blockMap.containsKey("states")) {
+                        Object statesObj = blockMap.get("states");
+                        if (statesObj instanceof Map) {
+                            Map<?, ?> statesMap = (Map<?, ?>) statesObj;
+                            if (statesMap.containsKey("color")) {
+                                String colorStr = String.valueOf(statesMap.get("color")).replace("\"", "").toLowerCase();
+                                meta = parseColorMeta(colorStr);
+                            }
+                        }
+                    }
+                }
             }
 
-            // Crear el bloque explícito (Evita devolver Aire)
+            // Aplicar el ID definitivo evaluando solo la raíz
+            if (rootId.contains("chest") && !rootId.contains("ender")) {
+                itemId = Item.CHEST;
+                meta = 0;
+            } else if (rootId.contains("ender_chest") || rootId.contains("enderchest")) {
+                itemId = Item.ENDER_CHEST;
+                meta = 0;
+            } else if (rootId.contains("shulker")) {
+                itemId = Item.SHULKER_BOX;
+            }
+
             Item itemToGive = Item.get(itemId, meta, 1);
 
             if (itemToGive.getId() == 0) {
@@ -127,9 +137,6 @@ public class NBTLoader extends PluginBase {
                 finalItemTag.putList(fullParsedTag.getList("Items"));
             } else if (fullParsedTag.contains("tag") && fullParsedTag.getCompound("tag").contains("Items")) {
                 finalItemTag.putList(fullParsedTag.getCompound("tag").getList("Items"));
-            } else {
-                player.sendMessage(TextFormat.RED + "Error: No se localizó el inventario ('Items') en este Kit.");
-                return true;
             }
 
             // 3. INYECTAR COSMÉTICOS Y GUARDAR
@@ -162,94 +169,115 @@ public class NBTLoader extends PluginBase {
         return true;
     }
 
-    // --- CONVERTIDOR DINÁMICO RECURSIVO ---
+    // Traduce los strings de colores a las metas de Shulker Box
+    private static int parseColorMeta(String color) {
+        switch (color) {
+            case "white": return 0;
+            case "orange": return 1;
+            case "magenta": return 2;
+            case "light_blue": return 3;
+            case "yellow": return 4;
+            case "lime": return 5;
+            case "pink": return 6;
+            case "gray": return 7;
+            case "silver":
+            case "light_gray": return 8;
+            case "cyan": return 9;
+            case "purple": return 10;
+            case "blue": return 11;
+            case "brown": return 12;
+            case "green": return 13;
+            case "red": return 14;
+            case "black": return 15;
+            default: return 0;
+        }
+    }
+
+    // --- CONVERTIDOR DINÁMICO QUE RESPETA TIPOS ESTRICTOS DE NUKKIT ---
     private static CompoundTag convertMapToCompoundTag(Map<String, Object> map) {
         CompoundTag compound = new CompoundTag();
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             String key = entry.getKey();
             Object val = entry.getValue();
 
-            // Forzar que los encantamientos sean ShortTags
-            if (key.equalsIgnoreCase("ench") && val instanceof List) {
-                ListTag<CompoundTag> enchListTag = new ListTag<>("ench");
-                for (Object enchObj : (List<?>) val) {
-                    if (enchObj instanceof Map) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> enchMap = (Map<String, Object>) enchObj;
-                        int id = 0, lvl = 1;
-                        if (enchMap.containsKey("id")) id = (int) safeParseLong(enchMap.get("id"));
-                        if (enchMap.containsKey("lvl")) lvl = (int) safeParseLong(enchMap.get("lvl"));
-
-                        CompoundTag enchEntry = new CompoundTag()
-                                .putShort("id", id)
-                                .putShort("lvl", lvl);
-                        enchListTag.add(enchEntry);
-                    }
-                }
-                compound.putList(enchListTag);
-                continue;
-            }
-
             if (val instanceof Map) {
                 @SuppressWarnings("unchecked")
                 CompoundTag subCompound = convertMapToCompoundTag((Map<String, Object>) val);
                 compound.putCompound(key, subCompound);
             } else if (val instanceof List) {
-                ListTag<cn.nukkit.nbt.tag.Tag> listTag = new ListTag<>(key);
+                ListTag<Tag> listTag = new ListTag<>(key);
                 for (Object subVal : (List<?>) val) {
-                    if (subVal instanceof Map) {
-                        @SuppressWarnings("unchecked")
-                        CompoundTag listItem = convertMapToCompoundTag((Map<String, Object>) subVal);
-                        listTag.add(listItem);
-                    } else if (subVal instanceof String) {
-                        listTag.add(new cn.nukkit.nbt.tag.StringTag("", String.valueOf(subVal).replace("\"", "")));
-                    } else {
-                        long rawNum = safeParseLong(subVal);
-                        if (rawNum > Integer.MAX_VALUE || rawNum < Integer.MIN_VALUE) {
-                            listTag.add(new cn.nukkit.nbt.tag.LongTag("", rawNum));
-                        } else {
-                            listTag.add(new cn.nukkit.nbt.tag.IntTag("", (int) rawNum));
-                        }
-                    }
+                    listTag.add(convertObjectToTag("", subVal));
                 }
                 compound.putList(listTag);
-            } else if (val instanceof Long) {
-                compound.putLong(key, (Long) val);
-            } else if (val instanceof Integer) {
-                compound.putInt(key, (Integer) val);
-            } else if (val instanceof Double || val instanceof Float) {
-                compound.putDouble(key, ((Number) val).doubleValue());
-            } else if (val instanceof Boolean) {
-                compound.putBoolean(key, (Boolean) val);
             } else {
-                String strVal = String.valueOf(val).replace("\"", "");
-                if (strVal.matches("-?\\d+")) {
-                    try {
-                        long parsedLong = Long.parseLong(strVal);
-                        if (parsedLong > Integer.MAX_VALUE || parsedLong < Integer.MIN_VALUE) {
-                            compound.putLong(key, parsedLong);
-                        } else {
-                            compound.putInt(key, (int) parsedLong);
-                        }
-                    } catch (NumberFormatException e) {
-                        compound.putString(key, strVal);
-                    }
-                } else {
-                    compound.putString(key, strVal);
-                }
+                compound.put(key, convertObjectToTag(key, val));
             }
         }
         return compound;
     }
 
-    private static long safeParseLong(Object obj) {
-        if (obj instanceof Number) return ((Number) obj).longValue();
-        String str = String.valueOf(obj).trim().replaceAll("[bslfdBSLFD]", "");
-        if (str.isEmpty()) return 0L;
-        if (str.contains(".")) return (long) Double.parseDouble(str);
-        return Long.parseLong(str);
+    // Mapea Strings crudos hacia los Tags exactos basándose en sus sufijos (Ej: "1b" -> ByteTag)
+    @SuppressWarnings("unchecked")
+    private static Tag convertObjectToTag(String name, Object valObj) {
+        if (valObj instanceof Map) {
+            CompoundTag c = convertMapToCompoundTag((Map<String, Object>) valObj);
+            return c.setName(name);
+        }
+        if (valObj instanceof List) {
+            ListTag<Tag> listTag = new ListTag<>(name);
+            for (Object subVal : (List<?>) valObj) {
+                listTag.add(convertObjectToTag("", subVal));
+            }
+            return listTag;
+        }
+
+        String str = String.valueOf(valObj).trim();
+
+        // 1. Strings envueltos en comillas puras
+        if (str.startsWith("\"") && str.endsWith("\"")) {
+            return new cn.nukkit.nbt.tag.StringTag(name, str.substring(1, str.length() - 1));
+        }
+
+        // 2. Booleanos nativos
+        if (str.equalsIgnoreCase("true")) return new cn.nukkit.nbt.tag.ByteTag(name, 1);
+        if (str.equalsIgnoreCase("false")) return new cn.nukkit.nbt.tag.ByteTag(name, 0);
+
+        // 3. Sufijos estrictos SNBT (CRÍTICO para Shulker Boxes en Nukkit)
+        if (str.matches("-?\\d+[bB]")) {
+            return new cn.nukkit.nbt.tag.ByteTag(name, Byte.parseByte(str.substring(0, str.length() - 1)));
+        }
+        if (str.matches("-?\\d+[sS]")) {
+            return new cn.nukkit.nbt.tag.ShortTag(name, Short.parseShort(str.substring(0, str.length() - 1)));
+        }
+        if (str.matches("-?\\d+[lL]")) {
+            return new cn.nukkit.nbt.tag.LongTag(name, Long.parseLong(str.substring(0, str.length() - 1)));
+        }
+        if (str.matches("-?\\d*\\.?\\d+[fF]")) {
+            return new cn.nukkit.nbt.tag.FloatTag(name, Float.parseFloat(str.substring(0, str.length() - 1)));
+        }
+        if (str.matches("-?\\d*\\.?\\d+[dD]")) {
+            return new cn.nukkit.nbt.tag.DoubleTag(name, Double.parseDouble(str.substring(0, str.length() - 1)));
+        }
+
+        // 4. Fallback de números brutos
+        if (str.matches("-?\\d+")) {
+            long l = Long.parseLong(str);
+            if (l > Integer.MAX_VALUE || l < Integer.MIN_VALUE) {
+                return new cn.nukkit.nbt.tag.LongTag(name, l);
+            } else {
+                return new cn.nukkit.nbt.tag.IntTag(name, (int) l);
+            }
+        }
+        if (str.matches("-?\\d+\\.\\d+")) {
+            return new cn.nukkit.nbt.tag.DoubleTag(name, Double.parseDouble(str));
+        }
+
+        // 5. Todo lo demás es un String normal (Ej: minecraft:stone)
+        return new cn.nukkit.nbt.tag.StringTag(name, str);
     }
 
+    // --- ANALIZADOR SNBT SEGURO (MANTIENE STRINGS CRUDOS) ---
     private static Object parseMiniSNBT(String s) {
         s = s.trim();
         if (s.startsWith("{")) {
@@ -262,7 +290,7 @@ public class NBTLoader extends PluginBase {
 
             for (int i = 0; i < s.length(); i++) {
                 char c = s.charAt(i);
-                if (c == '"') inQuotes = !inQuotes;
+                if (c == '"' && (i == 0 || s.charAt(i - 1) != '\\')) inQuotes = !inQuotes;
                 if (!inQuotes) {
                     if (c == '{' || c == '[') level++;
                     if (c == '}' || c == ']') level--;
@@ -277,14 +305,30 @@ public class NBTLoader extends PluginBase {
             if (current.length() > 0) tokens.add(current.toString().trim());
 
             for (String token : tokens) {
-                int colonIdx = token.indexOf(':');
+                if (token.isEmpty()) continue;
+                
+                // Buscar los dos puntos ":" que no estén envueltos en comillas (CRÍTICO)
+                int colonIdx = -1;
+                boolean inKeyQuotes = false;
+                for (int j = 0; j < token.length(); j++) {
+                    if (token.charAt(j) == '"') inKeyQuotes = !inKeyQuotes;
+                    if (!inKeyQuotes && token.charAt(j) == ':') {
+                        colonIdx = j;
+                        break;
+                    }
+                }
+
                 if (colonIdx != -1) {
-                    String k = token.substring(0, colonIdx).trim().replace("\"", "");
+                    String k = token.substring(0, colonIdx).trim();
+                    if (k.startsWith("\"") && k.endsWith("\"")) {
+                        k = k.substring(1, k.length() - 1);
+                    }
                     String v = token.substring(colonIdx + 1).trim();
                     map.put(k, parseMiniSNBT(v));
                 }
             }
             return map;
+            
         } else if (s.startsWith("[")) {
             List<Object> list = new ArrayList<>();
             s = s.substring(1, s.length() - 1).trim();
@@ -295,7 +339,7 @@ public class NBTLoader extends PluginBase {
 
             for (int i = 0; i < s.length(); i++) {
                 char c = s.charAt(i);
-                if (c == '"') inQuotes = !inQuotes;
+                if (c == '"' && (i == 0 || s.charAt(i - 1) != '\\')) inQuotes = !inQuotes;
                 if (!inQuotes) {
                     if (c == '{' || c == '[') level++;
                     if (c == '}' || c == ']') level--;
@@ -310,18 +354,13 @@ public class NBTLoader extends PluginBase {
             if (current.length() > 0) tokens.add(current.toString().trim());
 
             for (String token : tokens) {
-                if (!token.isEmpty()) list.add(parseMiniSNBT(token));
+                if (!token.trim().isEmpty()) {
+                    list.add(parseMiniSNBT(token));
+                }
             }
             return list;
         } else {
-            if (s.endsWith("b") || s.endsWith("s") || s.endsWith("l") || s.endsWith("f") || s.endsWith("d") ||
-                s.endsWith("B") || s.endsWith("S") || s.endsWith("L") || s.endsWith("F") || s.endsWith("D")) {
-                String sub = s.substring(0, s.length() - 1);
-                try { return sub.contains(".") ? Double.parseDouble(sub) : Long.parseLong(sub); } catch (Exception ignored) {}
-            }
-            if (s.equalsIgnoreCase("true")) return true;
-            if (s.equalsIgnoreCase("false")) return false;
-            try { return s.contains(".") ? Double.parseDouble(s) : Long.parseLong(s); } catch (Exception ignored) {}
+            // Ya no manipulamos los números aquí, retornamos el String crudo para preservar los sufijos.
             return s;
         }
     }
