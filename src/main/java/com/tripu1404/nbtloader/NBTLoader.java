@@ -18,10 +18,9 @@ public class NBTLoader extends PluginBase {
 
     @Override
     public void onEnable() {
-        // Aseguramos que la carpeta exista
         File nbtFolder = new File(getDataFolder(), "nbts");
         if (!nbtFolder.exists()) nbtFolder.mkdirs();
-        getLogger().info(TextFormat.GREEN + "NBTLoader para Kits Avanzados activado.");
+        getLogger().info(TextFormat.GREEN + "NBTLoader cargado. Sistema robusto activo.");
     }
 
     @Override
@@ -34,7 +33,6 @@ public class NBTLoader extends PluginBase {
             return true;
         }
 
-        // Construir nombre del archivo
         String fileName = String.join(" ", args).trim();
         if (!fileName.endsWith(".json")) fileName += ".json";
         
@@ -45,22 +43,20 @@ public class NBTLoader extends PluginBase {
         }
 
         try {
-            // Leer y limpiar el archivo para evitar errores de sintaxis
+            // Leer contenido y limpiar formato extraño de archivos exportados
             String rawContent = new String(Files.readAllBytes(nbtFile.toPath()), StandardCharsets.UTF_8).trim();
-            // Limpieza de caracteres extra que suelen venir en exportaciones como ivo (1).json
-            rawContent = rawContent.replaceAll(",\"", "\"").replaceAll("\\{,", "\\{");
             
             Object parsed = parseMiniSNBT(rawContent);
             if (!(parsed instanceof Map)) {
-                player.sendMessage(TextFormat.RED + "Error: Formato de archivo inválido.");
+                player.sendMessage(TextFormat.RED + "Error: Estructura de archivo no válida.");
                 return true;
             }
 
             @SuppressWarnings("unchecked")
             Map<String, Object> rootMap = (Map<String, Object>) parsed;
             
-            // 1. Detección automática del ítem usando la clave "Block" del JSON[cite: 2]
-            int itemId = Item.SHULKER_BOX;
+            // 1. Detección precisa de bloque leyendo el objeto "Block"
+            int itemId = Item.SHULKER_BOX; // Default
             int meta = 0;
             
             if (rootMap.containsKey("Block")) {
@@ -73,37 +69,37 @@ public class NBTLoader extends PluginBase {
                         itemId = Item.CHEST;
                     } else if (blockName.contains("shulker")) {
                         itemId = Item.SHULKER_BOX;
-                        // Extraer color automáticamente[cite: 2]
+                        // Extraer color si es un shulker
                         String[] colors = {"white","orange","magenta","light_blue","yellow","lime","pink","gray","silver","cyan","purple","blue","brown","green","red","black"};
                         for(int i=0; i<colors.length; i++) if(blockName.contains(colors[i])) meta = i;
                     }
                 }
             }
 
-            // 2. Procesamiento del NBT
+            // 2. Construcción del Item y su NBT completo
             Item item = Item.get(itemId, meta, 1);
             
-            // Extraer la propiedad "tag" que contiene los Items y Display[cite: 2]
             if (rootMap.containsKey("tag")) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> tagMap = (Map<String, Object>) rootMap.get("tag");
                 CompoundTag fullTag = convertMapToCompoundTag(tagMap);
                 
-                // Crear el BlockEntityTag para que el cofre/shulker guarde su inventario[cite: 2]
+                // Asegurar que el BlockEntityTag contenga los Items correctamente
                 CompoundTag finalTag = new CompoundTag();
                 if (fullTag.contains("Items")) {
                     finalTag.putCompound("BlockEntityTag", new CompoundTag().putList(fullTag.getList("Items")));
                 }
                 
-                // Copiar otras propiedades como display, enchantments, etc[cite: 2]
+                // Mapear el resto de propiedades NBT (Lore, nombre, encantamientos, etc)
                 if (fullTag.contains("display")) finalTag.putCompound("display", fullTag.getCompound("display"));
                 if (fullTag.contains("RepairCost")) finalTag.putInt("RepairCost", fullTag.getInt("RepairCost"));
+                if (fullTag.contains("ench")) finalTag.putList(fullTag.getList("ench"));
                 
                 item.setNamedTag(finalTag);
             }
 
             player.getInventory().addItem(item);
-            player.sendMessage(TextFormat.GREEN + "Kit '" + fileName + "' entregado correctamente.");
+            player.sendMessage(TextFormat.GREEN + "Kit '" + fileName + "' entregado.");
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -112,7 +108,8 @@ public class NBTLoader extends PluginBase {
         return true;
     }
 
-    // Método para convertir el mapa JSON a CompoundTag de Nukkit
+    // --- MÉTODOS ROBUSTOS DE CONVERSIÓN ---
+
     private static CompoundTag convertMapToCompoundTag(Map<String, Object> map) {
         CompoundTag compound = new CompoundTag();
         for (Map.Entry<String, Object> entry : map.entrySet()) {
@@ -127,7 +124,7 @@ public class NBTLoader extends PluginBase {
                     if (subVal instanceof Map) listTag.add(convertMapToCompoundTag((Map<String, Object>) subVal));
                     else if (subVal instanceof String) listTag.add(new cn.nukkit.nbt.tag.StringTag("", String.valueOf(subVal).replace("\"", "")));
                     else {
-                        long n = ((Number) subVal).longValue();
+                        long n = safeParseLong(subVal);
                         if (n > Integer.MAX_VALUE || n < Integer.MIN_VALUE) listTag.add(new cn.nukkit.nbt.tag.LongTag("", n));
                         else listTag.add(new cn.nukkit.nbt.tag.IntTag("", (int) n));
                     }
@@ -135,12 +132,30 @@ public class NBTLoader extends PluginBase {
                 compound.putList(listTag);
             } else if (val instanceof Long) compound.putLong(key, (Long) val);
             else if (val instanceof Integer) compound.putInt(key, (Integer) val);
-            else compound.putString(key, String.valueOf(val).replace("\"", ""));
+            else {
+                String strVal = String.valueOf(val).replace("\"", "");
+                // Intentar detectar si es un número disfrazado de string (como los "1b")
+                try {
+                    long n = safeParseLong(strVal);
+                    if (n > Integer.MAX_VALUE || n < Integer.MIN_VALUE) compound.putLong(key, n);
+                    else compound.putInt(key, (int) n);
+                } catch (Exception e) {
+                    compound.putString(key, strVal);
+                }
+            }
         }
         return compound;
     }
 
-    // Parser robusto para MiniSNBT/JSON[cite: 2]
+    // Método vital: elimina los sufijos 'b', 's', 'l' de los archivos como ivo.json
+    private static long safeParseLong(Object obj) {
+        if (obj instanceof Number) return ((Number) obj).longValue();
+        String str = String.valueOf(obj).trim().replaceAll("[bslfdBSLFD]", "");
+        if (str.isEmpty()) return 0L;
+        if (str.contains(".")) return (long) Double.parseDouble(str);
+        return Long.parseLong(str);
+    }
+
     private static Object parseMiniSNBT(String s) {
         s = s.trim();
         if (s.startsWith("{")) {
