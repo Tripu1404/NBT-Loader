@@ -40,24 +40,32 @@ jobs:
         find src/main/java -name "*.java" > sources.txt
         javac -d bin -cp "libs/nukkit.jar" @sources.txt
 
-    # 5. Copiar archivos de recursos (plugin.yml, carpetas internas)
+# 5. Copiar archivos de recursos (plugin.yml, etc)
     - name: Preparar Recursos
       run: |
         if [ -d "src/main/resources" ]; then
-          echo "Copiando recursos (plugin.yml, etc)..."
+          echo "Copiando recursos al directorio bin..."
           cp -r src/main/resources/* bin/
         fi
 
-    # 6. Empaquetar todo en el archivo .jar final
+    # 6. Crear un MANIFEST.MF válido en lugar de usar el plugin.yml directamente
     - name: Construir Artefacto JAR
       run: |
         mkdir -p target
+        
+        # Generar un archivo de manifiesto estándar compatible con Java
+        echo "Manifest-Version: 1.0" > manifest.mf
+        echo "Created-By: Tripu1404" >> manifest.mf
+        # Es CRÍTICO que los archivos de manifiesto terminen con una línea en blanco
+        echo "" >> manifest.mf
+        
         cd bin
         echo "Empaquetando en NBTLoader.jar..."
-        jar cfm ../target/NBTLoader.jar ../src/main/resources/plugin.yml .
+        # Usamos el manifiesto legítimo creado en la raíz y empaquetamos el contenido de bin
+        jar cfm ../target/NBTLoader.jar ../manifest.mf .
         cd ..
 
-    # 7. Subir el archivo .jar compilado a GitHub para que puedas descargarlo
+    # 7. Subir el archivo .jar compilado a GitHub
     - name: Subir Plugin Compilado
       uses: actions/upload-artifact@v4
       with:
