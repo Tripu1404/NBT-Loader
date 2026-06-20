@@ -27,7 +27,7 @@ public class NBTLoader extends PluginBase {
             saveResource("nbts/mommys_affection.txt", false);
             saveResource("nbts/Techno kit.txt", false);
         }
-        getLogger().info(TextFormat.GREEN + "NBTLoader para Kits Avanzados activado con soporte Nivel 32767. Hecho por Tripu1404.");
+        getLogger().info(TextFormat.GREEN + "NBTLoader para Kits Avanzados activado con soporte Long/Nivel 32767. Hecho por Tripu1404.");
     }
 
     @Override
@@ -66,28 +66,29 @@ public class NBTLoader extends PluginBase {
         }
 
         if (!nbtFile.exists()) {
-            player.sendMessage(TextFormat.RED + "El archivo '" + args[0] + "' no existe.");
+            player.sendMessage(TextFormat.RED + "El archivo '" + args[0] + "' no existe en la carpeta nbts.");
             return true;
         }
 
         try {
+            // 1. LEER EL CONTENIDO PLANO Y SANEARLO
             String rawContent = new String(Files.readAllBytes(nbtFile.toPath()), StandardCharsets.UTF_8).trim();
             
             if (rawContent.contains(",,")) rawContent = rawContent.replace(",,", ",");
             if (rawContent.contains(",}")) rawContent = rawContent.replace(",}", "}");
 
+            // 2. PARSEAR MEDIANTE EL MOTOR MINI-SNBT PERSONALIZADO
             Object parsedStructure = parseMiniSNBT(rawContent);
             if (!(parsedStructure instanceof Map)) {
-                player.sendMessage(TextFormat.RED + "Error: La raíz del archivo debe ser un objeto compuesto {}.");
+                player.sendMessage(TextFormat.RED + "Error: La raíz del archivo NBT debe ser un objeto compuesto {}.");
                 return true;
             }
 
             @SuppressWarnings("unchecked")
             Map<String, Object> rootMap = (Map<String, Object>) parsedStructure;
 
-            // 1. OBTENER ID Y COLOR DE LA SHULKER PRINCIPAL
-            String boxId = "minecraft:shulker_box";
-            
+            // 3. DETERMINAR EL ID Y COLOR DE LA CAJA SHULKER DINÁMICAMENTE
+            String boxId = "minecraft:shulker_box"; 
             if (rootMap.containsKey("Name")) {
                 boxId = String.valueOf(rootMap.get("Name"));
             } else if (rootMap.containsKey("Block") && rootMap.get("Block") instanceof Map) {
@@ -111,7 +112,7 @@ public class NBTLoader extends PluginBase {
                 }
             }
 
-            // Fallback de traducción directa si solo viene "shulker_box" plano pero el archivo contiene colores clave
+            // Fallback de color directo por si solo encuentra shulker_box plano
             if (boxId.equals("minecraft:shulker_box") || boxId.equals("minecraft:undyed_shulker_box")) {
                 String contentLower = rawContent.toLowerCase();
                 if (contentLower.contains("color:\"lime\"") || contentLower.contains("color:lime")) boxId = "minecraft:lime_shulker_box";
@@ -121,24 +122,24 @@ public class NBTLoader extends PluginBase {
                 else if (contentLower.contains("color:\"yellow\"") || contentLower.contains("color:yellow")) boxId = "minecraft:yellow_shulker_box";
             }
 
+            // Instanciar ítem base
             Item itemToGive = Item.fromString(boxId);
             itemToGive.setCount(1);
 
-            // 2. CONVERTIR TODO EL CONTENIDO DEL MAPA RAÍZ A UN COMPOUNDTAG COMPLETO
+            // 4. GENERACIÓN RECURSIVA REAL DE NBT Y OBTENCIÓN DE LA LISTA 'Items'
             CompoundTag fullParsedTag = convertMapToCompoundTag(rootMap);
             CompoundTag finalItemTag = new CompoundTag();
 
-            // Extraer la lista 'Items' de forma limpia sin importar su ubicación jerárquica
             if (fullParsedTag.contains("Items")) {
                 finalItemTag.putList(fullParsedTag.getList("Items"));
             } else if (fullParsedTag.contains("tag") && fullParsedTag.getCompound("tag").contains("Items")) {
                 finalItemTag.putList(fullParsedTag.getCompound("tag").getList("Items"));
             } else {
-                player.sendMessage(TextFormat.RED + "Error: No se localizó la lista 'Items' dentro del archivo.");
+                player.sendMessage(TextFormat.RED + "Error: No se localizó la lista 'Items' en el archivo.");
                 return true;
             }
 
-            // Mapear metadatos cosméticos globales si existen
+            // 5. SECCIÓN COSMÉTICA INTEGRADA (Nombres, Costos, Colores Custom)
             if (fullParsedTag.contains("tag")) {
                 CompoundTag innerTag = fullParsedTag.getCompound("tag");
                 if (innerTag.contains("display")) finalItemTag.putCompound("display", innerTag.getCompound("display"));
@@ -150,13 +151,13 @@ public class NBTLoader extends PluginBase {
                 if (fullParsedTag.contains("RepairCost")) finalItemTag.putInt("RepairCost", fullParsedTag.getInt("RepairCost"));
             }
 
-            // Aplicar el NBT reconstruído al ítem final
+            // Guardar NBT en el ítem
             itemToGive.setNamedTag(finalItemTag);
 
-            // 3. ENTREGA AL JUGADOR
+            // 6. ENTREGA AL INVENTARIO
             if (player.getInventory().canAddItem(itemToGive)) {
                 player.getInventory().addItem(itemToGive);
-                player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' entregado correctamente (NBT, Encantamientos y Colores corregidos).");
+                player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' procesado y entregado con éxito.");
             } else {
                 player.sendMessage(TextFormat.RED + "No tienes espacio suficiente en tu inventario.");
             }
@@ -169,14 +170,14 @@ public class NBTLoader extends PluginBase {
         return true;
     }
 
-    // --- CONVERTIDOR INTEGRAL RECURSIVO NATIVO ---
+    // --- CONVERTIDOR DINÁMICO RECURSIVO A PRUEBA DE DESBORDAMIENTOS (LONGS/INTS) ---
     private static CompoundTag convertMapToCompoundTag(Map<String, Object> map) {
         CompoundTag compound = new CompoundTag();
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             String key = entry.getKey();
             Object val = entry.getValue();
 
-            // Interceptamos la lista de encantamientos de Minecraft ("ench")
+            // Interceptamos la lista de encantamientos ("ench") para no corromper los IDs
             if (key.equalsIgnoreCase("ench") && val instanceof List) {
                 ListTag<CompoundTag> enchListTag = new ListTag<>("ench");
                 for (Object enchObj : (List<?>) val) {
@@ -185,8 +186,8 @@ public class NBTLoader extends PluginBase {
                         Map<String, Object> enchMap = (Map<String, Object>) enchObj;
                         int id = 0;
                         int lvl = 1;
-                        if (enchMap.containsKey("id")) id = safeParseInt(enchMap.get("id"));
-                        if (enchMap.containsKey("lvl")) lvl = safeParseInt(enchMap.get("lvl"));
+                        if (enchMap.containsKey("id")) id = (int) safeParseLong(enchMap.get("id"));
+                        if (enchMap.containsKey("lvl")) lvl = (int) safeParseLong(enchMap.get("lvl"));
 
                         CompoundTag enchEntry = new CompoundTag()
                                 .putShort("id", id)
@@ -198,7 +199,7 @@ public class NBTLoader extends PluginBase {
                 continue;
             }
 
-            // Mapeo dinámico recursivo para sub-compuestos y listas
+            // Mapeo recursivo estándar
             if (val instanceof Map) {
                 @SuppressWarnings("unchecked")
                 CompoundTag subCompound = convertMapToCompoundTag((Map<String, Object>) val);
@@ -213,11 +214,18 @@ public class NBTLoader extends PluginBase {
                     } else if (subVal instanceof String) {
                         listTag.add(new cn.nukkit.nbt.tag.StringTag("", String.valueOf(subVal).replace("\"", "")));
                     } else {
-                        // Respaldo para valores enteros o numéricos dentro de listas planas
-                        listTag.add(new cn.nukkit.nbt.tag.IntTag("", safeParseInt(subVal)));
+                        // Asignación inteligente para números dentro de listas planas
+                        long rawNum = safeParseLong(subVal);
+                        if (rawNum > Integer.MAX_VALUE || rawNum < Integer.MIN_VALUE) {
+                            listTag.add(new cn.nukkit.nbt.tag.LongTag("", rawNum));
+                        } else {
+                            listTag.add(new cn.nukkit.nbt.tag.IntTag("", (int) rawNum));
+                        }
                     }
                 }
                 compound.putList(listTag);
+            } else if (val instanceof Long) {
+                compound.putLong(key, (Long) val);
             } else if (val instanceof Integer) {
                 compound.putInt(key, (Integer) val);
             } else if (val instanceof Double || val instanceof Float) {
@@ -225,10 +233,19 @@ public class NBTLoader extends PluginBase {
             } else if (val instanceof Boolean) {
                 compound.putBoolean(key, (Boolean) val);
             } else {
-                // Conversión limpia para cadenas o primitivos de Minecraft con sufijos erróneos
+                // Validación para cadenas numéricas puras: si es muy grande usa Long, sino Int.
                 String strVal = String.valueOf(val).replace("\"", "");
                 if (strVal.matches("-?\\d+")) {
-                    compound.putInt(key, Integer.parseInt(strVal));
+                    try {
+                        long parsedLong = Long.parseLong(strVal);
+                        if (parsedLong > Integer.MAX_VALUE || parsedLong < Integer.MIN_VALUE) {
+                            compound.putLong(key, parsedLong);
+                        } else {
+                            compound.putInt(key, (int) parsedLong);
+                        }
+                    } catch (NumberFormatException e) {
+                        compound.putString(key, strVal);
+                    }
                 } else {
                     compound.putString(key, strVal);
                 }
@@ -237,18 +254,20 @@ public class NBTLoader extends PluginBase {
         return compound;
     }
 
-    private static int safeParseInt(Object obj) {
+    // Parser seguro de 64-bits para evadir java.lang.NumberFormatException
+    private static long safeParseLong(Object obj) {
         if (obj instanceof Number) {
-            return ((Number) obj).intValue();
+            return ((Number) obj).longValue();
         }
         String str = String.valueOf(obj).trim().replaceAll("[bslfdBSLFD]", "");
-        if (str.isEmpty()) return 0;
+        if (str.isEmpty()) return 0L;
         if (str.contains(".")) {
-            return (int) Double.parseDouble(str);
+            return (long) Double.parseDouble(str); // Descartar decimales en caso de "0.0"
         }
-        return Integer.parseInt(str);
+        return Long.parseLong(str);
     }
 
+    // Parseador manual que soporta SNBT puro de Bedrock y JSON estándar
     private static Object parseMiniSNBT(String s) {
         s = s.trim();
         if (s.startsWith("{")) {
@@ -313,14 +332,15 @@ public class NBTLoader extends PluginBase {
             }
             return list;
         } else {
+            // Conversiones de los valores finales sueltos
             if (s.endsWith("b") || s.endsWith("s") || s.endsWith("l") || s.endsWith("f") || s.endsWith("d") ||
                 s.endsWith("B") || s.endsWith("S") || s.endsWith("L") || s.endsWith("F") || s.endsWith("D")) {
                 String sub = s.substring(0, s.length() - 1);
-                try { return sub.contains(".") ? Double.parseDouble(sub) : Integer.parseInt(sub); } catch (Exception ignored) {}
+                try { return sub.contains(".") ? Double.parseDouble(sub) : Long.parseLong(sub); } catch (Exception ignored) {}
             }
             if (s.equalsIgnoreCase("true")) return true;
             if (s.equalsIgnoreCase("false")) return false;
-            try { return s.contains(".") ? Double.parseDouble(s) : Integer.parseInt(s); } catch (Exception ignored) {}
+            try { return s.contains(".") ? Double.parseDouble(s) : Long.parseLong(s); } catch (Exception ignored) {}
             return s;
         }
     }
