@@ -1,0 +1,65 @@
+name: Compilar Plugin sin Maven
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Permite ejecutar el flujo manualmente desde GitHub
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Descargar el código fuente del repositorio
+    - name: Descargar Código Fuente
+      uses: actions/checkout@v4
+
+    # 2. Configurar el entorno de Java (Nukkit requiere Java 17 o superior en versiones recientes)
+    - name: Configurar Java JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    # 3. Descargar la API de Nukkit/Cloudburst desde el servidor de Jenkins oficial
+    - name: Descargar Nukkit JAR (Dependencia)
+      run: |
+        mkdir -p libs
+        echo "Descargando Nukkit de los servidores de Cloudburst..."
+        curl -L -o libs/nukkit.jar https://github.com/PetteriM1/NukkitPetteriM1Edition/releases/download/4437/Nukkit-PM1E.jar || \
+        curl -L -o libs/nukkit.jar https://github.com/PetteriM1/NukkitPetteriM1Edition/releases/download/4437/Nukkit-PM1E.jar
+        
+    # 4. Crear la estructura temporal y compilar el código fuente con javac
+    - name: Compilar Clases Java
+      run: |
+        mkdir -p bin
+        echo "Compilando archivos .java..."
+        # Busca todos los archivos .java en src y los compila usando nukkit.jar en el classpath
+        find src/main/java -name "*.java" > sources.txt
+        javac -d bin -cp "libs/nukkit.jar" @sources.txt
+
+    # 5. Copiar archivos de recursos (plugin.yml, carpetas internas)
+    - name: Preparar Recursos
+      run: |
+        if [ -d "src/main/resources" ]; then
+          echo "Copiando recursos (plugin.yml, etc)..."
+          cp -r src/main/resources/* bin/
+        fi
+
+    # 6. Empaquetar todo en el archivo .jar final
+    - name: Construir Artefacto JAR
+      run: |
+        mkdir -p target
+        cd bin
+        echo "Empaquetando en NBTLoader.jar..."
+        jar cfm ../target/NBTLoader.jar ../src/main/resources/plugin.yml .
+        cd ..
+
+    # 7. Subir el archivo .jar compilado a GitHub para que puedas descargarlo
+    - name: Subir Plugin Compilado
+      uses: actions/upload-artifact@v4
+      with:
+        name: NBTLoader-Plugin
+        path: target/NBTLoader.jar
