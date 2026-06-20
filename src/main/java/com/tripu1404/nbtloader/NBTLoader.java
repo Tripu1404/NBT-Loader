@@ -24,10 +24,8 @@ public class NBTLoader extends PluginBase {
         File nbtFolder = new File(getDataFolder(), "nbts");
         if (!nbtFolder.exists()) {
             nbtFolder.mkdirs();
-            saveResource("nbts/mommys_affection.txt", false);
-            saveResource("nbts/Techno kit.txt", false);
         }
-        getLogger().info(TextFormat.GREEN + "NBTLoader para Kits Avanzados activado con soporte Long/Nivel 32767. Hecho por Tripu1404.");
+        getLogger().info(TextFormat.GREEN + "NBTLoader para Kits Avanzados activado (Fix Aire/Shulker Color).");
     }
 
     @Override
@@ -44,7 +42,7 @@ public class NBTLoader extends PluginBase {
         Player player = (Player) sender;
 
         if (!player.hasPermission("nbtloader.command.givekit")) {
-            player.sendMessage(TextFormat.RED + "No tienes permisos para usar este comando.");
+            player.sendMessage(TextFormat.RED + "No tienes permisos.");
             return true;
         }
 
@@ -61,8 +59,8 @@ public class NBTLoader extends PluginBase {
         File nbtFile = new File(new File(getDataFolder(), "nbts"), fileName);
 
         if (!nbtFile.exists()) {
-            String alternativeName = fileName.endsWith(".txt") ? fileName.replace(".txt", ".json") : fileName.replace(".json", ".txt");
-            nbtFile = new File(new File(getDataFolder(), "nbts"), alternativeName);
+            String altName = fileName.endsWith(".txt") ? fileName.replace(".txt", ".json") : fileName.replace(".json", ".txt");
+            nbtFile = new File(new File(getDataFolder(), "nbts"), altName);
         }
 
         if (!nbtFile.exists()) {
@@ -71,13 +69,11 @@ public class NBTLoader extends PluginBase {
         }
 
         try {
-            // 1. LEER EL CONTENIDO PLANO Y SANEARLO
             String rawContent = new String(Files.readAllBytes(nbtFile.toPath()), StandardCharsets.UTF_8).trim();
             
             if (rawContent.contains(",,")) rawContent = rawContent.replace(",,", ",");
             if (rawContent.contains(",}")) rawContent = rawContent.replace(",}", "}");
 
-            // 2. PARSEAR MEDIANTE EL MOTOR MINI-SNBT PERSONALIZADO
             Object parsedStructure = parseMiniSNBT(rawContent);
             if (!(parsedStructure instanceof Map)) {
                 player.sendMessage(TextFormat.RED + "Error: La raíz del archivo NBT debe ser un objeto compuesto {}.");
@@ -87,46 +83,43 @@ public class NBTLoader extends PluginBase {
             @SuppressWarnings("unchecked")
             Map<String, Object> rootMap = (Map<String, Object>) parsedStructure;
 
-            // 3. DETERMINAR EL ID Y COLOR DE LA CAJA SHULKER DINÁMICAMENTE
-            String boxId = "minecraft:shulker_box"; 
-            if (rootMap.containsKey("Name")) {
-                boxId = String.valueOf(rootMap.get("Name"));
-            } else if (rootMap.containsKey("Block") && rootMap.get("Block") instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> blockMap = (Map<String, Object>) rootMap.get("Block");
-                if (blockMap.containsKey("name")) {
-                    boxId = String.valueOf(blockMap.get("name"));
-                }
-                if (blockMap.containsKey("states") && blockMap.get("states") instanceof Map) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> statesMap = (Map<String, Object>) blockMap.get("states");
-                    if (statesMap.containsKey("color")) {
-                        boxId = "minecraft:" + String.valueOf(statesMap.get("color")).replace("\"", "") + "_shulker_box";
-                    }
-                }
-            } else if (rootMap.containsKey("states") && rootMap.get("states") instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> statesMap = (Map<String, Object>) rootMap.get("states");
-                if (statesMap.containsKey("color")) {
-                    boxId = "minecraft:" + String.valueOf(statesMap.get("color")).replace("\"", "") + "_shulker_box";
-                }
+            // 1. SOLUCIÓN AL ERROR DE DAR "AIRE": MAPEO POR META (DAÑO) Y NO POR STRING ID
+            int itemId = Item.SHULKER_BOX; // 218 en Nukkit
+            int meta = 0; // Color por defecto
+
+            String lowerContent = rawContent.toLowerCase();
+
+            // Detectar si es un cofre o una shulker y aplicar el color vía meta
+            if (lowerContent.contains("minecraft:chest") || lowerContent.contains("name:\"chest\"") || lowerContent.contains("name:chest")) {
+                itemId = Item.CHEST; // 54 en Nukkit
+            } else {
+                if (lowerContent.contains("color:\"white\"") || lowerContent.contains("color:white")) meta = 0;
+                else if (lowerContent.contains("color:\"orange\"") || lowerContent.contains("color:orange")) meta = 1;
+                else if (lowerContent.contains("color:\"magenta\"") || lowerContent.contains("color:magenta")) meta = 2;
+                else if (lowerContent.contains("color:\"light_blue\"") || lowerContent.contains("color:light_blue")) meta = 3;
+                else if (lowerContent.contains("color:\"yellow\"") || lowerContent.contains("color:yellow")) meta = 4;
+                else if (lowerContent.contains("color:\"lime\"") || lowerContent.contains("color:lime")) meta = 5;
+                else if (lowerContent.contains("color:\"pink\"") || lowerContent.contains("color:pink")) meta = 6;
+                else if (lowerContent.contains("color:\"gray\"") || lowerContent.contains("color:gray")) meta = 7;
+                else if (lowerContent.contains("color:\"silver\"") || lowerContent.contains("color:silver") || lowerContent.contains("color:light_gray")) meta = 8;
+                else if (lowerContent.contains("color:\"cyan\"") || lowerContent.contains("color:cyan")) meta = 9;
+                else if (lowerContent.contains("color:\"purple\"") || lowerContent.contains("color:purple")) meta = 10;
+                else if (lowerContent.contains("color:\"blue\"") || lowerContent.contains("color:blue")) meta = 11;
+                else if (lowerContent.contains("color:\"brown\"") || lowerContent.contains("color:brown")) meta = 12;
+                else if (lowerContent.contains("color:\"green\"") || lowerContent.contains("color:green")) meta = 13;
+                else if (lowerContent.contains("color:\"red\"") || lowerContent.contains("color:red")) meta = 14;
+                else if (lowerContent.contains("color:\"black\"") || lowerContent.contains("color:black")) meta = 15;
             }
 
-            // Fallback de color directo por si solo encuentra shulker_box plano
-            if (boxId.equals("minecraft:shulker_box") || boxId.equals("minecraft:undyed_shulker_box")) {
-                String contentLower = rawContent.toLowerCase();
-                if (contentLower.contains("color:\"lime\"") || contentLower.contains("color:lime")) boxId = "minecraft:lime_shulker_box";
-                else if (contentLower.contains("color:\"pink\"") || contentLower.contains("color:pink")) boxId = "minecraft:pink_shulker_box";
-                else if (contentLower.contains("color:\"green\"") || contentLower.contains("color:green")) boxId = "minecraft:green_shulker_box";
-                else if (contentLower.contains("color:\"brown\"") || contentLower.contains("color:brown")) boxId = "minecraft:brown_shulker_box";
-                else if (contentLower.contains("color:\"yellow\"") || contentLower.contains("color:yellow")) boxId = "minecraft:yellow_shulker_box";
+            // Crear el bloque explícito (Evita devolver Aire)
+            Item itemToGive = Item.get(itemId, meta, 1);
+
+            if (itemToGive.getId() == 0) {
+                player.sendMessage(TextFormat.RED + "Error del servidor: No se pudo generar el bloque base.");
+                return true;
             }
 
-            // Instanciar ítem base
-            Item itemToGive = Item.fromString(boxId);
-            itemToGive.setCount(1);
-
-            // 4. GENERACIÓN RECURSIVA REAL DE NBT Y OBTENCIÓN DE LA LISTA 'Items'
+            // 2. EXTRAER NBT Y ARMAR EL COMPUESTO
             CompoundTag fullParsedTag = convertMapToCompoundTag(rootMap);
             CompoundTag finalItemTag = new CompoundTag();
 
@@ -135,11 +128,11 @@ public class NBTLoader extends PluginBase {
             } else if (fullParsedTag.contains("tag") && fullParsedTag.getCompound("tag").contains("Items")) {
                 finalItemTag.putList(fullParsedTag.getCompound("tag").getList("Items"));
             } else {
-                player.sendMessage(TextFormat.RED + "Error: No se localizó la lista 'Items' en el archivo.");
+                player.sendMessage(TextFormat.RED + "Error: No se localizó el inventario ('Items') en este Kit.");
                 return true;
             }
 
-            // 5. SECCIÓN COSMÉTICA INTEGRADA (Nombres, Costos, Colores Custom)
+            // 3. INYECTAR COSMÉTICOS Y GUARDAR
             if (fullParsedTag.contains("tag")) {
                 CompoundTag innerTag = fullParsedTag.getCompound("tag");
                 if (innerTag.contains("display")) finalItemTag.putCompound("display", innerTag.getCompound("display"));
@@ -151,41 +144,39 @@ public class NBTLoader extends PluginBase {
                 if (fullParsedTag.contains("RepairCost")) finalItemTag.putInt("RepairCost", fullParsedTag.getInt("RepairCost"));
             }
 
-            // Guardar NBT en el ítem
             itemToGive.setNamedTag(finalItemTag);
 
-            // 6. ENTREGA AL INVENTARIO
+            // 4. ENTREGAR
             if (player.getInventory().canAddItem(itemToGive)) {
                 player.getInventory().addItem(itemToGive);
                 player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' procesado y entregado con éxito.");
             } else {
-                player.sendMessage(TextFormat.RED + "No tienes espacio suficiente en tu inventario.");
+                player.sendMessage(TextFormat.RED + "No tienes espacio suficiente.");
             }
 
         } catch (Exception e) {
-            player.sendMessage(TextFormat.RED + "Error crítico al procesar este Kit. Revisa la consola.");
+            player.sendMessage(TextFormat.RED + "Error crítico. Revisa la consola.");
             getServer().getLogger().logException(e);
         }
 
         return true;
     }
 
-    // --- CONVERTIDOR DINÁMICO RECURSIVO A PRUEBA DE DESBORDAMIENTOS (LONGS/INTS) ---
+    // --- CONVERTIDOR DINÁMICO RECURSIVO ---
     private static CompoundTag convertMapToCompoundTag(Map<String, Object> map) {
         CompoundTag compound = new CompoundTag();
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             String key = entry.getKey();
             Object val = entry.getValue();
 
-            // Interceptamos la lista de encantamientos ("ench") para no corromper los IDs
+            // Forzar que los encantamientos sean ShortTags
             if (key.equalsIgnoreCase("ench") && val instanceof List) {
                 ListTag<CompoundTag> enchListTag = new ListTag<>("ench");
                 for (Object enchObj : (List<?>) val) {
                     if (enchObj instanceof Map) {
                         @SuppressWarnings("unchecked")
                         Map<String, Object> enchMap = (Map<String, Object>) enchObj;
-                        int id = 0;
-                        int lvl = 1;
+                        int id = 0, lvl = 1;
                         if (enchMap.containsKey("id")) id = (int) safeParseLong(enchMap.get("id"));
                         if (enchMap.containsKey("lvl")) lvl = (int) safeParseLong(enchMap.get("lvl"));
 
@@ -199,7 +190,6 @@ public class NBTLoader extends PluginBase {
                 continue;
             }
 
-            // Mapeo recursivo estándar
             if (val instanceof Map) {
                 @SuppressWarnings("unchecked")
                 CompoundTag subCompound = convertMapToCompoundTag((Map<String, Object>) val);
@@ -214,7 +204,6 @@ public class NBTLoader extends PluginBase {
                     } else if (subVal instanceof String) {
                         listTag.add(new cn.nukkit.nbt.tag.StringTag("", String.valueOf(subVal).replace("\"", "")));
                     } else {
-                        // Asignación inteligente para números dentro de listas planas
                         long rawNum = safeParseLong(subVal);
                         if (rawNum > Integer.MAX_VALUE || rawNum < Integer.MIN_VALUE) {
                             listTag.add(new cn.nukkit.nbt.tag.LongTag("", rawNum));
@@ -233,7 +222,6 @@ public class NBTLoader extends PluginBase {
             } else if (val instanceof Boolean) {
                 compound.putBoolean(key, (Boolean) val);
             } else {
-                // Validación para cadenas numéricas puras: si es muy grande usa Long, sino Int.
                 String strVal = String.valueOf(val).replace("\"", "");
                 if (strVal.matches("-?\\d+")) {
                     try {
@@ -254,20 +242,14 @@ public class NBTLoader extends PluginBase {
         return compound;
     }
 
-    // Parser seguro de 64-bits para evadir java.lang.NumberFormatException
     private static long safeParseLong(Object obj) {
-        if (obj instanceof Number) {
-            return ((Number) obj).longValue();
-        }
+        if (obj instanceof Number) return ((Number) obj).longValue();
         String str = String.valueOf(obj).trim().replaceAll("[bslfdBSLFD]", "");
         if (str.isEmpty()) return 0L;
-        if (str.contains(".")) {
-            return (long) Double.parseDouble(str); // Descartar decimales en caso de "0.0"
-        }
+        if (str.contains(".")) return (long) Double.parseDouble(str);
         return Long.parseLong(str);
     }
 
-    // Parseador manual que soporta SNBT puro de Bedrock y JSON estándar
     private static Object parseMiniSNBT(String s) {
         s = s.trim();
         if (s.startsWith("{")) {
@@ -332,7 +314,6 @@ public class NBTLoader extends PluginBase {
             }
             return list;
         } else {
-            // Conversiones de los valores finales sueltos
             if (s.endsWith("b") || s.endsWith("s") || s.endsWith("l") || s.endsWith("f") || s.endsWith("d") ||
                 s.endsWith("B") || s.endsWith("S") || s.endsWith("L") || s.endsWith("F") || s.endsWith("D")) {
                 String sub = s.substring(0, s.length() - 1);
