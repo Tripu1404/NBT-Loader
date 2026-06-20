@@ -7,12 +7,17 @@ import cn.nukkit.item.Item;
 import cn.nukkit.nbt.tag.CompoundTag;
 import cn.nukkit.nbt.tag.ListTag;
 import cn.nukkit.plugin.PluginBase;
-import cn.nukkit.utils.Config;
 import cn.nukkit.utils.TextFormat;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class NBTLoader extends PluginBase {
 
@@ -27,7 +32,6 @@ public class NBTLoader extends PluginBase {
         getLogger().info(TextFormat.GREEN + "NBTLoader optimizado para Kits Avanzados activado. Hecho por Tripu1404.");
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!command.getName().equalsIgnoreCase("givekit")) {
@@ -69,125 +73,102 @@ public class NBTLoader extends PluginBase {
         }
 
         try {
-            // 1. CARGA VÍA CONFIG (Universal)
-            Config jsonConfig = new Config(nbtFile, Config.JSON);
-            Map<String, Object> rootMap = jsonConfig.getAll();
+            // 1. LEER EL CONTENIDO PLANO Y SANEARLO DE SINTAXIS SNBT
+            String rawContent = new String(Files.readAllBytes(nbtFile.toPath()), StandardCharsets.UTF_8).trim();
+            
+            // Reparar errores de formato comunes en kits ilegales (comas dobles o llaves mal cerradas)
+            if (rawContent.contains(",,")) rawContent = rawContent.replace(",,", ",");
+            if (rawContent.contains(",}")) rawContent = rawContent.replace(",}", "}");
 
-            if (rootMap == null || rootMap.isEmpty()) {
-                player.sendMessage(TextFormat.RED + "Error: El archivo NBT está vacío o no tiene un formato JSON válido.");
+            // 2. PARSEAR MEDIANTE UN MOTOR MINI-SNBT PERSONALIZADO (Evita Gson por completo)
+            Object parsedStructure = parseMiniSNBT(rawContent);
+            if (!(parsedStructure instanceof Map)) {
+                player.sendMessage(TextFormat.RED + "Error: La raíz del archivo NBT debe ser un objeto compuesto {}.");
                 return true;
             }
 
-            // Convertimos el mapa de configuración a un CompoundTag de manera manual 
-            // Esto evita usar NBTIO.putObjectProperty que cambia o no existe en algunos jars.
-            CompoundTag rootTag = new CompoundTag();
-            
-            // Inyectamos de forma segura las propiedades mapeadas al tag raíz
-            Map<String, cn.nukkit.nbt.tag.Tag> internalTags = rootTag.getTags();
-            for (Map.Entry<String, Object> entry : rootMap.entrySet()) {
-                if (entry.getValue() instanceof cn.nukkit.nbt.tag.Tag) {
-                    internalTags.put(entry.getKey(), (cn.nukkit.nbt.tag.Tag) entry.getValue());
-                }
-            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rootMap = (Map<String, Object>) parsedStructure;
 
-            // 2. DETERMINAR EL ID DE LA CAJA SHULKER DINÁMICAMENTE
+            // 3. DETERMINAR EL ID DE LA CAJA SHULKER DINÁMICAMENTE
             String boxId = "minecraft:shulker_box"; 
-
             if (rootMap.containsKey("Name")) {
                 boxId = String.valueOf(rootMap.get("Name"));
             } else if (rootMap.containsKey("Block") && rootMap.get("Block") instanceof Map) {
+                @SuppressWarnings("unchecked")
                 Map<String, Object> blockMap = (Map<String, Object>) rootMap.get("Block");
                 if (blockMap.containsKey("name")) {
                     boxId = String.valueOf(blockMap.get("name"));
                 }
-            } else {
-                // Mapeo por fallback si viene con "states"
-                Object statesObj = rootMap.get("states");
-                if (statesObj instanceof Map) {
-                    Map<String, Object> statesMap = (Map<String, Object>) statesObj;
-                    if (statesMap.containsKey("color")) {
-                        boxId = "minecraft:" + statesMap.get("color") + "_shulker_box";
-                    }
+            } else if (rootMap.containsKey("states") && rootMap.get("states") instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> statesMap = (Map<String, Object>) rootMap.get("states");
+                if (statesMap.containsKey("color")) {
+                    boxId = "minecraft:" + String.valueOf(statesMap.get("color")).replace("\"", "") + "_shulker_box";
                 }
             }
 
-            // Crear el ítem base en el servidor
+            // Instanciar ítem base
             Item itemToGive = Item.fromString(boxId);
             itemToGive.setCount(1);
 
-            // 3. EXTRACCIÓN MANUAL DE LA LISTA DE ÍTEMS INTERNOS
-            // Solución al error de putList argument lengths diferring
+            // 4. GENERACIÓN RECURSIVA REAL DE NBT (Corrige el inventario vacío)
             CompoundTag finalItemTag = new CompoundTag();
-            ListTag<CompoundTag> itemsList = null;
 
-            if (rootMap.containsKey("Items")) {
-                Object itemsObj = rootMap.get("Items");
-                if (itemsObj instanceof List) {
-                    itemsList = new ListTag<>("Items");
-                    for (Object itemObj : (List<?>) itemsObj) {
-                        if (itemObj instanceof Map) {
-                            CompoundTag itemTag = new CompoundTag();
-                            // Rellenar de forma cruda las propiedades del subítem
-                            itemTag.getTags().putAll((Map<String, cn.nukkit.nbt.tag.Tag>) itemObj);
-                            itemsList.add(itemTag);
-                        }
-                    }
-                }
-            } else if (rootMap.containsKey("tag")) {
-                Object tagObj = rootMap.get("tag");
-                if (tagObj instanceof Map) {
-                    Map<String, Object> innerTagMap = (Map<String, Object>) tagObj;
-                    if (innerTagMap.containsKey("Items") && innerTagMap.get("Items") instanceof List) {
-                        itemsList = new ListTag<>("Items");
-                        for (Object itemObj : (List<?>) innerTagMap.get("Items")) {
-                            if (itemObj instanceof Map) {
-                                CompoundTag itemTag = new CompoundTag();
-                                itemTag.getTags().putAll((Map<String, cn.nukkit.nbt.tag.Tag>) itemObj);
-                                itemsList.add(itemTag);
-                            }
-                        }
-                    }
+            // Buscar la lista "Items" en la raíz o dentro del nodo "tag"
+            List<?> itemsRawList = null;
+            Map<String, Object> tagSection = null;
+
+            if (rootMap.containsKey("Items") && rootMap.get("Items") instanceof List) {
+                itemsRawList = (List<?>) rootMap.get("Items");
+            } else if (rootMap.containsKey("tag") && rootMap.get("tag") instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> parsedTag = (Map<String, Object>) rootMap.get("tag");
+                tagSection = parsedTag;
+                if (parsedTag.containsKey("Items") && parsedTag.get("Items") instanceof List) {
+                    itemsRawList = (List<?>) parsedTag.get("Items");
                 }
             }
 
-            if (itemsList != null) {
-                // Solución al error: En tu versión de Nukkit, putList(ListTag) no requiere un String de clave,
-                // ya que toma el nombre directamente del constructor del ListTag ("Items")
-                finalItemTag.putList(itemsList);
+            if (itemsRawList != null) {
+                // Construimos la lista real usando tags genuinos de Nukkit
+                ListTag<CompoundTag> itemsListTag = new ListTag<>("Items");
+                for (Object element : itemsRawList) {
+                    if (element instanceof Map) {
+                        @SuppressWarnings("unchecked")
+                        CompoundTag subItemTag = convertMapToCompoundTag((Map<String, Object>) element);
+                        itemsListTag.add(subItemTag);
+                    }
+                }
+                finalItemTag.putList(itemsListTag);
             } else {
-                player.sendMessage(TextFormat.RED + "Error: No se localizó la lista 'Items' dentro del archivo.");
+                player.sendMessage(TextFormat.RED + "Error: No se localizó la lista 'Items' en el archivo.");
                 return true;
             }
 
-            // 4. PRESERVAR METADATOS COSMÉTICOS Y ADICIONALES (display, customColor, RepairCost)
-            if (rootMap.containsKey("tag") && rootMap.get("tag") instanceof Map) {
-                Map<String, Object> innerTagMap = (Map<String, Object>) rootMap.get("tag");
-                
-                if (innerTagMap.containsKey("display") && innerTagMap.get("display") instanceof Map) {
-                    CompoundTag displayTag = new CompoundTag("display");
-                    displayTag.getTags().putAll((Map<String, cn.nukkit.nbt.tag.Tag>) innerTagMap.get("display"));
+            // 5. SECCIÓN COSMÉTICA INTEGRADA SIN EXPLOSIONES DECIMALES
+            if (tagSection != null) {
+                if (tagSection.containsKey("display") && tagSection.get("display") instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    CompoundTag displayTag = convertMapToCompoundTag((Map<String, Object>) tagSection.get("display"));
                     finalItemTag.putCompound("display", displayTag);
                 }
-                
-                if (innerTagMap.containsKey("customColor")) {
-                    finalItemTag.putInt("customColor", Integer.parseInt(String.valueOf(innerTagMap.get("customColor"))));
+                // Solución al NumberFormatException usando un lector de números seguro
+                if (tagSection.containsKey("customColor")) {
+                    finalItemTag.putInt("customColor", safeParseInt(tagSection.get("customColor")));
                 }
-                if (innerTagMap.containsKey("RepairCost")) {
-                    finalItemTag.putInt("RepairCost", Integer.parseInt(String.valueOf(innerTagMap.get("RepairCost"))));
+                if (tagSection.containsKey("RepairCost")) {
+                    finalItemTag.putInt("RepairCost", safeParseInt(tagSection.get("RepairCost")));
                 }
-            } else if (rootMap.containsKey("display") && rootMap.get("display") instanceof Map) {
-                CompoundTag displayTag = new CompoundTag("display");
-                displayTag.getTags().putAll((Map<String, cn.nukkit.nbt.tag.Tag>) rootMap.get("display"));
-                finalItemTag.putCompound("display", displayTag);
             }
 
-            // Inyectar etiquetas procesadas al ítem final
+            // Guardar NBT en el ítem
             itemToGive.setNamedTag(finalItemTag);
 
-            // 5. ENTREGA AL JUGADOR
+            // 6. ENTREGA
             if (player.getInventory().canAddItem(itemToGive)) {
                 player.getInventory().addItem(itemToGive);
-                player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' cargado y procesado correctamente.");
+                player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' procesado por completo y con inventario lleno.");
             } else {
                 player.sendMessage(TextFormat.RED + "No tienes espacio suficiente en tu inventario.");
             }
@@ -198,5 +179,128 @@ public class NBTLoader extends PluginBase {
         }
 
         return true;
+    }
+
+    // --- UTILIDADES DE CONVERSIÓN RECURSIVA ---
+
+    private static CompoundTag convertMapToCompoundTag(Map<String, Object> map) {
+        CompoundTag compound = new CompoundTag();
+        for (Map.Entry<String, Object> entry : map.entrySet()) {
+            String key = entry.getKey();
+            Object val = entry.getValue();
+
+            if (val instanceof Map) {
+                @SuppressWarnings("unchecked")
+                CompoundTag subCompound = convertMapToCompoundTag((Map<String, Object>) val);
+                compound.putCompound(key, subCompound);
+            } else if (val instanceof List) {
+                ListTag<cn.nukkit.nbt.tag.Tag> listTag = new ListTag<>(key);
+                for (Object subVal : (List<?>) val) {
+                    if (subVal instanceof Map) {
+                        @SuppressWarnings("unchecked")
+                        CompoundTag listItem = convertMapToCompoundTag((Map<String, Object>) subVal);
+                        listTag.add(listItem);
+                    }
+                }
+                compound.putList(listTag);
+            } else if (val instanceof Integer) {
+                compound.putInt(key, (Integer) val);
+            } else if (val instanceof Double || val instanceof Float) {
+                compound.putDouble(key, ((Number) val).doubleValue());
+            } else if (val instanceof Boolean) {
+                compound.putBoolean(key, (Boolean) val);
+            } else {
+                compound.putString(key, String.valueOf(val).replace("\"", ""));
+            }
+        }
+        return compound;
+    }
+
+    private static int safeParseInt(Object obj) {
+        if (obj instanceof Number) {
+            return ((Number) obj).intValue();
+        }
+        String str = String.valueOf(obj).trim();
+        if (str.contains(".")) {
+            return (int) Double.parseDouble(str);
+        }
+        return Integer.parseInt(str);
+    }
+
+    // Parser manual ultra dinámico que procesa SNBT y JSON con/sin comillas o sufijos numéricos
+    private static Object parseMiniSNBT(String s) {
+        s = s.trim();
+        if (s.startsWith("{")) {
+            Map<String, Object> map = new LinkedHashMap<>();
+            s = s.substring(1, s.length() - 1).trim();
+            int level = 0;
+            boolean inQuotes = false;
+            StringBuilder current = new StringBuilder();
+            List<String> tokens = new ArrayList<>();
+
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                if (c == '"') inQuotes = !inQuotes;
+                if (!inQuotes) {
+                    if (c == '{' || c == '[') level++;
+                    if (c == '}' || c == ']') level--;
+                    if (c == ',' && level == 0) {
+                        tokens.add(current.toString().trim());
+                        current = new StringBuilder();
+                        continue;
+                    }
+                }
+                current.append(c);
+            }
+            if (current.length() > 0) tokens.add(current.toString().trim());
+
+            for (String token : tokens) {
+                int colonIdx = token.indexOf(':');
+                if (colonIdx != -1) {
+                    String k = token.substring(0, colonIdx).trim().replace("\"", "");
+                    String v = token.substring(colonIdx + 1).trim();
+                    map.put(k, parseMiniSNBT(v));
+                }
+            }
+            return map;
+        } else if (s.startsWith("[")) {
+            List<Object> list = new ArrayList<>();
+            s = s.substring(1, s.length() - 1).trim();
+            int level = 0;
+            boolean inQuotes = false;
+            StringBuilder current = new StringBuilder();
+            List<String> tokens = new ArrayList<>();
+
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                if (c == '"') inQuotes = !inQuotes;
+                if (!inQuotes) {
+                    if (c == '{' || c == '[') level++;
+                    if (c == '}' || c == ']') level--;
+                    if (c == ',' && level == 0) {
+                        tokens.add(current.toString().trim());
+                        current = new StringBuilder();
+                        continue;
+                    }
+                }
+                current.append(c);
+            }
+            if (current.length() > 0) tokens.add(current.toString().trim());
+
+            for (String token : tokens) {
+                if (!token.isEmpty()) list.add(parseMiniSNBT(token));
+            }
+            return list;
+        } else {
+            // Limpieza de sufijos numéricos de Minecraft (ej: 64b -> 64, 0s -> 0)
+            if (s.endsWith("b") || s.endsWith("s") || s.endsWith("l") || s.endsWith("f") || s.endsWith("d")) {
+                String sub = s.substring(0, s.length() - 1);
+                try { return sub.contains(".") ? Double.parseDouble(sub) : Integer.parseInt(sub); } catch (Exception ignored) {}
+            }
+            if (s.equalsIgnoreCase("true")) return true;
+            if (s.equalsIgnoreCase("false")) return false;
+            try { return s.contains(".") ? Double.parseDouble(s) : Integer.parseInt(s); } catch (Exception ignored) {}
+            return s;
+        }
     }
 }
