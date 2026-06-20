@@ -4,7 +4,6 @@ import cn.nukkit.Player;
 import cn.nukkit.command.Command;
 import cn.nukkit.command.CommandSender;
 import cn.nukkit.item.Item;
-import cn.nukkit.nbt.NBTIO;
 import cn.nukkit.nbt.tag.CompoundTag;
 import cn.nukkit.nbt.tag.ListTag;
 import cn.nukkit.plugin.PluginBase;
@@ -28,6 +27,7 @@ public class NBTLoader extends PluginBase {
         getLogger().info(TextFormat.GREEN + "NBTLoader optimizado para Kits Avanzados activado. Hecho por Tripu1404.");
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!command.getName().equalsIgnoreCase("givekit")) {
@@ -69,7 +69,7 @@ public class NBTLoader extends PluginBase {
         }
 
         try {
-            // 1. CARGA SEGURA VÍA CONFIG (Universal para cualquier JSON/SNBT)
+            // 1. CARGA VÍA CONFIG (Universal)
             Config jsonConfig = new Config(nbtFile, Config.JSON);
             Map<String, Object> rootMap = jsonConfig.getAll();
 
@@ -78,62 +78,107 @@ public class NBTLoader extends PluginBase {
                 return true;
             }
 
-            // Convertimos el mapa de configuración a un CompoundTag nativo de Nukkit
+            // Convertimos el mapa de configuración a un CompoundTag de manera manual 
+            // Esto evita usar NBTIO.putObjectProperty que cambia o no existe en algunos jars.
             CompoundTag rootTag = new CompoundTag();
+            
+            // Inyectamos de forma segura las propiedades mapeadas al tag raíz
+            Map<String, cn.nukkit.nbt.tag.Tag> internalTags = rootTag.getTags();
             for (Map.Entry<String, Object> entry : rootMap.entrySet()) {
-                NBTIO.putObjectProperty(rootTag, entry.getKey(), entry.getValue());
+                if (entry.getValue() instanceof cn.nukkit.nbt.tag.Tag) {
+                    internalTags.put(entry.getKey(), (cn.nukkit.nbt.tag.Tag) entry.getValue());
+                }
             }
 
             // 2. DETERMINAR EL ID DE LA CAJA SHULKER DINÁMICAMENTE
             String boxId = "minecraft:shulker_box"; 
 
-            if (rootTag.contains("Name")) {
-                boxId = rootTag.getString("Name");
-            } else if (rootTag.contains("Block") && rootTag.getCompound("Block").contains("name")) {
-                boxId = rootTag.getCompound("Block").getString("name");
-            } else if (rootTag.contains("states") && rootTag.getCompound("states").contains("color")) {
-                String color = rootTag.getCompound("states").getString("color");
-                boxId = "minecraft:" + color + "_shulker_box";
+            if (rootMap.containsKey("Name")) {
+                boxId = String.valueOf(rootMap.get("Name"));
+            } else if (rootMap.containsKey("Block") && rootMap.get("Block") instanceof Map) {
+                Map<String, Object> blockMap = (Map<String, Object>) rootMap.get("Block");
+                if (blockMap.containsKey("name")) {
+                    boxId = String.valueOf(blockMap.get("name"));
+                }
+            } else {
+                // Mapeo por fallback si viene con "states"
+                Object statesObj = rootMap.get("states");
+                if (statesObj instanceof Map) {
+                    Map<String, Object> statesMap = (Map<String, Object>) statesObj;
+                    if (statesMap.containsKey("color")) {
+                        boxId = "minecraft:" + statesMap.get("color") + "_shulker_box";
+                    }
+                }
             }
 
             // Crear el ítem base en el servidor
             Item itemToGive = Item.fromString(boxId);
             itemToGive.setCount(1);
 
-            // 3. EXTRACCIÓN INTELIGENTE DE LA LISTA DE ÍTEMS INTERNOS
+            // 3. EXTRACCIÓN MANUAL DE LA LISTA DE ÍTEMS INTERNOS
+            // Solución al error de putList argument lengths diferring
             CompoundTag finalItemTag = new CompoundTag();
             ListTag<CompoundTag> itemsList = null;
 
-            if (rootTag.contains("Items")) {
-                itemsList = rootTag.getList("Items", CompoundTag.class);
-            } else if (rootTag.contains("tag") && rootTag.getCompound("tag").contains("Items")) {
-                itemsList = rootTag.getCompound("tag").getList("Items", CompoundTag.class);
+            if (rootMap.containsKey("Items")) {
+                Object itemsObj = rootMap.get("Items");
+                if (itemsObj instanceof List) {
+                    itemsList = new ListTag<>("Items");
+                    for (Object itemObj : (List<?>) itemsObj) {
+                        if (itemObj instanceof Map) {
+                            CompoundTag itemTag = new CompoundTag();
+                            // Rellenar de forma cruda las propiedades del subítem
+                            itemTag.getTags().putAll((Map<String, cn.nukkit.nbt.tag.Tag>) itemObj);
+                            itemsList.add(itemTag);
+                        }
+                    }
+                }
+            } else if (rootMap.containsKey("tag")) {
+                Object tagObj = rootMap.get("tag");
+                if (tagObj instanceof Map) {
+                    Map<String, Object> innerTagMap = (Map<String, Object>) tagObj;
+                    if (innerTagMap.containsKey("Items") && innerTagMap.get("Items") instanceof List) {
+                        itemsList = new ListTag<>("Items");
+                        for (Object itemObj : (List<?>) innerTagMap.get("Items")) {
+                            if (itemObj instanceof Map) {
+                                CompoundTag itemTag = new CompoundTag();
+                                itemTag.getTags().putAll((Map<String, cn.nukkit.nbt.tag.Tag>) itemObj);
+                                itemsList.add(itemTag);
+                            }
+                        }
+                    }
+                }
             }
 
             if (itemsList != null) {
-                finalItemTag.putList("Items", itemsList);
+                // Solución al error: En tu versión de Nukkit, putList(ListTag) no requiere un String de clave,
+                // ya que toma el nombre directamente del constructor del ListTag ("Items")
+                finalItemTag.putList(itemsList);
             } else {
                 player.sendMessage(TextFormat.RED + "Error: No se localizó la lista 'Items' dentro del archivo.");
                 return true;
             }
 
-            // 4. PRESERVAR METADATOS COSMÉTICOS (Nombres de Kits, Lores, Encantamientos directos)
-            CompoundTag displayTag = null;
-            if (rootTag.contains("tag") && rootTag.getCompound("tag").contains("display")) {
-                displayTag = rootTag.getCompound("tag").getCompound("display");
-            } else if (rootTag.contains("display")) {
-                displayTag = rootTag.getCompound("display");
-            }
-
-            if (displayTag != null) {
+            // 4. PRESERVAR METADATOS COSMÉTICOS Y ADICIONALES (display, customColor, RepairCost)
+            if (rootMap.containsKey("tag") && rootMap.get("tag") instanceof Map) {
+                Map<String, Object> innerTagMap = (Map<String, Object>) rootMap.get("tag");
+                
+                if (innerTagMap.containsKey("display") && innerTagMap.get("display") instanceof Map) {
+                    CompoundTag displayTag = new CompoundTag("display");
+                    displayTag.getTags().putAll((Map<String, cn.nukkit.nbt.tag.Tag>) innerTagMap.get("display"));
+                    finalItemTag.putCompound("display", displayTag);
+                }
+                
+                if (innerTagMap.containsKey("customColor")) {
+                    finalItemTag.putInt("customColor", Integer.parseInt(String.valueOf(innerTagMap.get("customColor"))));
+                }
+                if (innerTagMap.containsKey("RepairCost")) {
+                    finalItemTag.putInt("RepairCost", Integer.parseInt(String.valueOf(innerTagMap.get("RepairCost"))));
+                }
+            } else if (rootMap.containsKey("display") && rootMap.get("display") instanceof Map) {
+                CompoundTag displayTag = new CompoundTag("display");
+                displayTag.getTags().putAll((Map<String, cn.nukkit.nbt.tag.Tag>) rootMap.get("display"));
                 finalItemTag.putCompound("display", displayTag);
-            }
-
-            // Mantener colores y costos de reparación si existen
-            if (rootTag.contains("tag")) {
-                CompoundTag originalTag = rootTag.getCompound("tag");
-                if (originalTag.contains("customColor")) finalItemTag.putInt("customColor", originalTag.getInt("customColor"));
-                if (originalTag.contains("RepairCost")) finalItemTag.putInt("RepairCost", originalTag.getInt("RepairCost"));
             }
 
             // Inyectar etiquetas procesadas al ítem final
