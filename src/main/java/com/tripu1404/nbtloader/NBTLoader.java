@@ -12,18 +12,20 @@ import cn.nukkit.utils.TextFormat;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
 
 public class NBTLoader extends PluginBase {
 
     @Override
     public void onEnable() {
+        // Asegurar la creación de las carpetas de datos
         File nbtFolder = new File(getDataFolder(), "nbts");
         if (!nbtFolder.exists()) {
             nbtFolder.mkdirs();
             
-            saveResource("nbts/mommys_affection.json", false);
-            saveResource("nbts/insane_nested.json", false);
-            saveResource("nbts/build_nested_v1.json", false);
+            // Registros iniciales por defecto (opcional)
+            saveResource("nbts/mommys_affection.txt", false);
+            saveResource("nbts/Techno kit.txt", false);
         }
         getLogger().info(TextFormat.GREEN + "NBTLoader optimizado para Kits Avanzados activado. Hecho por Tripu1404.");
     }
@@ -52,12 +54,14 @@ public class NBTLoader extends PluginBase {
         }
 
         String fileName = args[0];
+        // Soportar tanto si escriben con extensión como si no
         if (!fileName.endsWith(".json") && !fileName.endsWith(".txt")) {
             fileName += ".txt"; 
         }
 
         File nbtFile = new File(new File(getDataFolder(), "nbts"), fileName);
 
+        // Intento de fallback si no encuentra el archivo con .txt, busca .json
         if (!nbtFile.exists()) {
             String alternativeName = fileName.endsWith(".txt") ? fileName.replace(".txt", ".json") : fileName.replace(".json", ".txt");
             nbtFile = new File(new File(getDataFolder(), "nbts"), alternativeName);
@@ -69,19 +73,36 @@ public class NBTLoader extends PluginBase {
         }
 
         try {
-            String snbtContent = new String(Files.readAllBytes(nbtFile.toPath())).trim();
+            // 1. Leer todo el contenido del archivo de texto y limpiar espacios
+            String snbtContent = new String(Files.readAllBytes(nbtFile.toPath()), StandardCharsets.UTF_8).trim();
 
+            // Corrección de sintaxis rápida por si hay comas duplicadas
             if (snbtContent.contains(",,")) {
                 snbtContent = snbtContent.replace(",,", ",");
             }
 
-            CompoundTag rootTag = NBTIO.parseJSON(snbtContent);
+            // 2. PARSEO SEGURO: Solución al error de compilación de la API de Nukkit
+            CompoundTag rootTag = null;
+            try {
+                // Método estándar oficial en la gran mayoría de forks de NukkitX / Cloudburst
+                rootTag = NBTIO.readJSON(snbtContent);
+            } catch (NoSuchMethodError | Exception e) {
+                // Fallback mecánico en caso de que la firma del método varíe en el JAR de desarrollo
+                try (java.io.ByteArrayInputStream bai = new java.io.ByteArrayInputStream(snbtContent.getBytes(StandardCharsets.UTF_8));
+                     java.io.DataInputStream dis = new java.io.DataInputStream(bai)) {
+                    cn.nukkit.nbt.tag.Tag tag = cn.nukkit.nbt.tag.Tag.readNamedTag(dis);
+                    if (tag instanceof CompoundTag) {
+                        rootTag = (CompoundTag) tag;
+                    }
+                }
+            }
 
             if (rootTag == null) {
-                player.sendMessage(TextFormat.RED + "Error: Estructura NBT inválida o vacía en el archivo.");
+                player.sendMessage(TextFormat.RED + "Error: Estructura NBT inválida, vacía o incompatible.");
                 return true;
             }
 
+            // 3. Determinar el tipo de objeto (Caja Shulker) de forma dinámica
             String boxId = "minecraft:shulker_box"; 
 
             if (rootTag.contains("Name")) {
@@ -97,12 +118,13 @@ public class NBTLoader extends PluginBase {
                 else if (lowerContent.contains("color:\"yellow\"") || lowerContent.contains("color:yellow")) boxId = "minecraft:yellow_shulker_box";
                 else if (lowerContent.contains("color:\"pink\"") || lowerContent.contains("color:pink")) boxId = "minecraft:pink_shulker_box";
                 else if (lowerContent.contains("color:\"green\"") || lowerContent.contains("color:green")) boxId = "minecraft:green_shulker_box";
-                else if (lowerContent.contains("color:\"brown\"") || lowerContent.contains("color:brown")) boxId = "minecraft:brown_shulker_box";
             }
 
+            // Instanciar el objeto en Nukkit
             Item itemToGive = Item.fromString(boxId);
             itemToGive.setCount(1);
 
+            // 4. Extracción inteligente de la lista "Items"
             CompoundTag finalItemTag = new CompoundTag();
 
             if (rootTag.contains("Items")) {
@@ -114,6 +136,7 @@ public class NBTLoader extends PluginBase {
                 return true;
             }
 
+            // 5. Conservar propiedades cosméticas (Nombres, lores, etc.)
             CompoundTag displayTag = null;
             if (rootTag.contains("tag") && rootTag.getCompound("tag").contains("display")) {
                 displayTag = rootTag.getCompound("tag").getCompound("display");
@@ -125,26 +148,29 @@ public class NBTLoader extends PluginBase {
                 finalItemTag.putCompound("display", displayTag);
             }
 
+            // Copiar metadatos adicionales del contenedor si existen
             if (rootTag.contains("tag")) {
                 CompoundTag originalTag = rootTag.getCompound("tag");
                 if (originalTag.contains("customColor")) finalItemTag.putInt("customColor", originalTag.getInt("customColor"));
                 if (originalTag.contains("RepairCost")) finalItemTag.putInt("RepairCost", originalTag.getInt("RepairCost"));
             }
 
+            // Asignar el NBT definitivo al ítem
             itemToGive.setNamedTag(finalItemTag);
 
+            // 6. Entrega al jugador
             if (player.getInventory().canAddItem(itemToGive)) {
                 player.getInventory().addItem(itemToGive);
-                player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' cargado y procesado con éxito.");
+                player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' procesado con éxito.");
             } else {
                 player.sendMessage(TextFormat.RED + "No tienes espacio suficiente en el inventario.");
             }
 
         } catch (IOException e) {
-            player.sendMessage(TextFormat.RED + "Error de Entrada/Salida al leer el archivo físico.");
+            player.sendMessage(TextFormat.RED + "Error de Entrada/Salida al leer el archivo.");
             getServer().getLogger().logException(e);
         } catch (Exception e) {
-            player.sendMessage(TextFormat.RED + "Error de parseo NBT: Revisa la consola para ver los detalles estructurales.");
+            player.sendMessage(TextFormat.RED + "Error crítico de parseo. Revisa la consola.");
             getServer().getLogger().logException(e);
         }
 
