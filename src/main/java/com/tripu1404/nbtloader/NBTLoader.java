@@ -25,14 +25,12 @@ public class NBTLoader extends PluginBase {
         if (!nbtFolder.exists()) {
             nbtFolder.mkdirs();
         }
-        getLogger().info(TextFormat.GREEN + "NBTLoader para Kits Avanzados activado (Fix Aire/Shulker Color).");
+        getLogger().info(TextFormat.GREEN + "NBTLoader para Kits Avanzados activado.");
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!command.getName().equalsIgnoreCase("givekit")) {
-            return false;
-        }
+        if (!command.getName().equalsIgnoreCase("givekit")) return false;
 
         if (!(sender instanceof Player)) {
             sender.sendMessage(TextFormat.RED + "Este comando solo puede ser usado por jugadores.");
@@ -40,7 +38,6 @@ public class NBTLoader extends PluginBase {
         }
 
         Player player = (Player) sender;
-
         if (!player.hasPermission("nbtloader.command.givekit")) {
             player.sendMessage(TextFormat.RED + "No tienes permisos.");
             return true;
@@ -52,25 +49,21 @@ public class NBTLoader extends PluginBase {
         }
 
         String fileName = args[0];
-        if (!fileName.endsWith(".json") && !fileName.endsWith(".txt")) {
-            fileName += ".txt"; 
-        }
+        if (!fileName.endsWith(".json") && !fileName.endsWith(".txt")) fileName += ".txt";
 
         File nbtFile = new File(new File(getDataFolder(), "nbts"), fileName);
-
         if (!nbtFile.exists()) {
             String altName = fileName.endsWith(".txt") ? fileName.replace(".txt", ".json") : fileName.replace(".json", ".txt");
             nbtFile = new File(new File(getDataFolder(), "nbts"), altName);
         }
 
         if (!nbtFile.exists()) {
-            player.sendMessage(TextFormat.RED + "El archivo '" + args[0] + "' no existe en la carpeta nbts.");
+            player.sendMessage(TextFormat.RED + "El archivo '" + args[0] + "' no existe.");
             return true;
         }
 
         try {
             String rawContent = new String(Files.readAllBytes(nbtFile.toPath()), StandardCharsets.UTF_8).trim();
-            
             if (rawContent.contains(",,")) rawContent = rawContent.replace(",,", ",");
             if (rawContent.contains(",}")) rawContent = rawContent.replace(",}", "}");
 
@@ -83,94 +76,70 @@ public class NBTLoader extends PluginBase {
             @SuppressWarnings("unchecked")
             Map<String, Object> rootMap = (Map<String, Object>) parsedStructure;
 
-            // 1. SOLUCIÓN AL ERROR DE DAR "AIRE": MAPEO POR META (DAÑO) Y NO POR STRING ID
-            int itemId = Item.SHULKER_BOX; // 218 en Nukkit
-            int meta = 0; // Color por defecto
-
+            int itemId = Item.SHULKER_BOX;
+            int meta = 0;
             String lowerContent = rawContent.toLowerCase();
 
-            // Detectar si es un cofre o una shulker y aplicar el color vía meta
             if (lowerContent.contains("minecraft:chest") || lowerContent.contains("name:\"chest\"") || lowerContent.contains("name:chest")) {
-                itemId = Item.CHEST; // 54 en Nukkit
+                itemId = Item.CHEST;
             } else {
-                if (lowerContent.contains("color:\"white\"") || lowerContent.contains("color:white")) meta = 0;
-                else if (lowerContent.contains("color:\"orange\"") || lowerContent.contains("color:orange")) meta = 1;
-                else if (lowerContent.contains("color:\"magenta\"") || lowerContent.contains("color:magenta")) meta = 2;
-                else if (lowerContent.contains("color:\"light_blue\"") || lowerContent.contains("color:light_blue")) meta = 3;
-                else if (lowerContent.contains("color:\"yellow\"") || lowerContent.contains("color:yellow")) meta = 4;
-                else if (lowerContent.contains("color:\"lime\"") || lowerContent.contains("color:lime")) meta = 5;
-                else if (lowerContent.contains("color:\"pink\"") || lowerContent.contains("color:pink")) meta = 6;
-                else if (lowerContent.contains("color:\"gray\"") || lowerContent.contains("color:gray")) meta = 7;
-                else if (lowerContent.contains("color:\"silver\"") || lowerContent.contains("color:silver") || lowerContent.contains("color:light_gray")) meta = 8;
-                else if (lowerContent.contains("color:\"cyan\"") || lowerContent.contains("color:cyan")) meta = 9;
-                else if (lowerContent.contains("color:\"purple\"") || lowerContent.contains("color:purple")) meta = 10;
-                else if (lowerContent.contains("color:\"blue\"") || lowerContent.contains("color:blue")) meta = 11;
-                else if (lowerContent.contains("color:\"brown\"") || lowerContent.contains("color:brown")) meta = 12;
-                else if (lowerContent.contains("color:\"green\"") || lowerContent.contains("color:green")) meta = 13;
-                else if (lowerContent.contains("color:\"red\"") || lowerContent.contains("color:red")) meta = 14;
-                else if (lowerContent.contains("color:\"black\"") || lowerContent.contains("color:black")) meta = 15;
+                String[] colors = {"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "silver", "cyan", "purple", "blue", "brown", "green", "red", "black"};
+                for (int i = 0; i < colors.length; i++) {
+                    if (lowerContent.contains("color:\"" + colors[i] + "\"") || lowerContent.contains("color:" + colors[i])) {
+                        meta = i;
+                        break;
+                    }
+                }
             }
 
-            // Crear el bloque explícito (Evita devolver Aire)
             Item itemToGive = Item.get(itemId, meta, 1);
-
-            if (itemToGive.getId() == 0) {
-                player.sendMessage(TextFormat.RED + "Error del servidor: No se pudo generar el bloque base.");
-                return true;
-            }
-
-// 2. EXTRAER NBT Y ARMAR EL COMPUESTO
             CompoundTag fullParsedTag = convertMapToCompoundTag(rootMap);
-            CompoundTag blockEntityTag = new CompoundTag(); // ESTA ES LA CLAVE PARA EL CONTENIDO
+            CompoundTag itemTag = new CompoundTag();
 
+            // 1. Configurar BlockEntityTag (Contenido)
             if (fullParsedTag.contains("Items")) {
-                blockEntityTag.putList(fullParsedTag.getList("Items"));
+                itemTag.putCompound("BlockEntityTag", new CompoundTag().putList(fullParsedTag.getList("Items")));
             } else if (fullParsedTag.contains("tag") && fullParsedTag.getCompound("tag").contains("Items")) {
-                blockEntityTag.putList(fullParsedTag.getCompound("tag").getList("Items"));
-            } else {
-                player.sendMessage(TextFormat.RED + "Error: No se localizó la lista 'Items'.");
-                return true;
+                itemTag.putCompound("BlockEntityTag", new CompoundTag().putList(fullParsedTag.getCompound("tag").getList("Items")));
             }
 
-            // 3. INYECTAR EN BlockEntityTag PARA QUE AL PONERLO TENGA COSAS
-            // Esto es lo que le dice al servidor: "Cuando este bloque se coloque, usa esto como su inventario"
-            itemToGive.setNamedTag(new CompoundTag()
-                    .putCompound("BlockEntityTag", blockEntityTag)
-                    .putCompound("display", fullParsedTag.contains("tag") ? 
-                                 fullParsedTag.getCompound("tag").getCompound("display") : 
-                                 new CompoundTag().putString("Name", "§rKit Personalizado"))
-            );
-            // 3. INYECTAR COSMÉTICOS Y GUARDAR
+            // 2. Configurar Cosméticos (Display, etc)
             if (fullParsedTag.contains("tag")) {
                 CompoundTag innerTag = fullParsedTag.getCompound("tag");
-                if (innerTag.contains("display")) finalItemTag.putCompound("display", innerTag.getCompound("display"));
-                if (innerTag.contains("customColor")) finalItemTag.putInt("customColor", innerTag.getInt("customColor"));
-                if (innerTag.contains("RepairCost")) finalItemTag.putInt("RepairCost", innerTag.getInt("RepairCost"));
-            } else {
-            // 4. ENTREGAR
+                if (innerTag.contains("display")) itemTag.putCompound("display", innerTag.getCompound("display"));
+                if (innerTag.contains("customColor")) itemTag.putInt("customColor", innerTag.getInt("customColor"));
+                if (innerTag.contains("RepairCost")) itemTag.putInt("RepairCost", innerTag.getInt("RepairCost"));
+            }
+            
+            // Si no tiene nombre en el display, le ponemos uno por defecto
+            if (!itemTag.contains("display")) {
+                itemTag.putCompound("display", new CompoundTag().putString("Name", "§r" + fileName));
+            }
+
+            itemToGive.setNamedTag(itemTag);
+
+            // 3. ENTREGAR
             if (player.getInventory().canAddItem(itemToGive)) {
                 player.getInventory().addItem(itemToGive);
-                player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' procesado y entregado con éxito.");
+                player.sendMessage(TextFormat.GREEN + "» Kit '" + fileName + "' entregado con éxito.");
             } else {
                 player.sendMessage(TextFormat.RED + "No tienes espacio suficiente.");
             }
 
         } catch (Exception e) {
-            player.sendMessage(TextFormat.RED + "Error crítico. Revisa la consola.");
+            player.sendMessage(TextFormat.RED + "Error crítico al procesar el kit.");
             getServer().getLogger().logException(e);
         }
 
         return true;
     }
 
-    // --- CONVERTIDOR DINÁMICO RECURSIVO ---
     private static CompoundTag convertMapToCompoundTag(Map<String, Object> map) {
         CompoundTag compound = new CompoundTag();
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             String key = entry.getKey();
             Object val = entry.getValue();
 
-            // Forzar que los encantamientos sean ShortTags
             if (key.equalsIgnoreCase("ench") && val instanceof List) {
                 ListTag<CompoundTag> enchListTag = new ListTag<>("ench");
                 for (Object enchObj : (List<?>) val) {
@@ -180,37 +149,23 @@ public class NBTLoader extends PluginBase {
                         int id = 0, lvl = 1;
                         if (enchMap.containsKey("id")) id = (int) safeParseLong(enchMap.get("id"));
                         if (enchMap.containsKey("lvl")) lvl = (int) safeParseLong(enchMap.get("lvl"));
-
-                        CompoundTag enchEntry = new CompoundTag()
-                                .putShort("id", id)
-                                .putShort("lvl", lvl);
-                        enchListTag.add(enchEntry);
+                        enchListTag.add(new CompoundTag().putShort("id", id).putShort("lvl", lvl));
                     }
                 }
                 compound.putList(enchListTag);
-                continue;
-            }
-
-            if (val instanceof Map) {
-                @SuppressWarnings("unchecked")
-                CompoundTag subCompound = convertMapToCompoundTag((Map<String, Object>) val);
-                compound.putCompound(key, subCompound);
+            } else if (val instanceof Map) {
+                compound.putCompound(key, convertMapToCompoundTag((Map<String, Object>) val));
             } else if (val instanceof List) {
                 ListTag<cn.nukkit.nbt.tag.Tag> listTag = new ListTag<>(key);
                 for (Object subVal : (List<?>) val) {
                     if (subVal instanceof Map) {
-                        @SuppressWarnings("unchecked")
-                        CompoundTag listItem = convertMapToCompoundTag((Map<String, Object>) subVal);
-                        listTag.add(listItem);
+                        listTag.add(convertMapToCompoundTag((Map<String, Object>) subVal));
                     } else if (subVal instanceof String) {
                         listTag.add(new cn.nukkit.nbt.tag.StringTag("", String.valueOf(subVal).replace("\"", "")));
                     } else {
                         long rawNum = safeParseLong(subVal);
-                        if (rawNum > Integer.MAX_VALUE || rawNum < Integer.MIN_VALUE) {
-                            listTag.add(new cn.nukkit.nbt.tag.LongTag("", rawNum));
-                        } else {
-                            listTag.add(new cn.nukkit.nbt.tag.IntTag("", (int) rawNum));
-                        }
+                        if (rawNum > Integer.MAX_VALUE || rawNum < Integer.MIN_VALUE) listTag.add(new cn.nukkit.nbt.tag.LongTag("", rawNum));
+                        else listTag.add(new cn.nukkit.nbt.tag.IntTag("", (int) rawNum));
                     }
                 }
                 compound.putList(listTag);
@@ -227,17 +182,10 @@ public class NBTLoader extends PluginBase {
                 if (strVal.matches("-?\\d+")) {
                     try {
                         long parsedLong = Long.parseLong(strVal);
-                        if (parsedLong > Integer.MAX_VALUE || parsedLong < Integer.MIN_VALUE) {
-                            compound.putLong(key, parsedLong);
-                        } else {
-                            compound.putInt(key, (int) parsedLong);
-                        }
-                    } catch (NumberFormatException e) {
-                        compound.putString(key, strVal);
-                    }
-                } else {
-                    compound.putString(key, strVal);
-                }
+                        if (parsedLong > Integer.MAX_VALUE || parsedLong < Integer.MIN_VALUE) compound.putLong(key, parsedLong);
+                        else compound.putInt(key, (int) parsedLong);
+                    } catch (NumberFormatException e) { compound.putString(key, strVal); }
+                } else { compound.putString(key, strVal); }
             }
         }
         return compound;
@@ -256,11 +204,9 @@ public class NBTLoader extends PluginBase {
         if (s.startsWith("{")) {
             Map<String, Object> map = new LinkedHashMap<>();
             s = s.substring(1, s.length() - 1).trim();
-            int level = 0;
-            boolean inQuotes = false;
+            int level = 0; boolean inQuotes = false;
             StringBuilder current = new StringBuilder();
             List<String> tokens = new ArrayList<>();
-
             for (int i = 0; i < s.length(); i++) {
                 char c = s.charAt(i);
                 if (c == '"') inQuotes = !inQuotes;
@@ -269,31 +215,23 @@ public class NBTLoader extends PluginBase {
                     if (c == '}' || c == ']') level--;
                     if (c == ',' && level == 0) {
                         tokens.add(current.toString().trim());
-                        current = new StringBuilder();
-                        continue;
+                        current = new StringBuilder(); continue;
                     }
                 }
                 current.append(c);
             }
             if (current.length() > 0) tokens.add(current.toString().trim());
-
             for (String token : tokens) {
                 int colonIdx = token.indexOf(':');
-                if (colonIdx != -1) {
-                    String k = token.substring(0, colonIdx).trim().replace("\"", "");
-                    String v = token.substring(colonIdx + 1).trim();
-                    map.put(k, parseMiniSNBT(v));
-                }
+                if (colonIdx != -1) map.put(token.substring(0, colonIdx).trim().replace("\"", ""), parseMiniSNBT(token.substring(colonIdx + 1).trim()));
             }
             return map;
         } else if (s.startsWith("[")) {
             List<Object> list = new ArrayList<>();
             s = s.substring(1, s.length() - 1).trim();
-            int level = 0;
-            boolean inQuotes = false;
+            int level = 0; boolean inQuotes = false;
             StringBuilder current = new StringBuilder();
             List<String> tokens = new ArrayList<>();
-
             for (int i = 0; i < s.length(); i++) {
                 char c = s.charAt(i);
                 if (c == '"') inQuotes = !inQuotes;
@@ -302,17 +240,13 @@ public class NBTLoader extends PluginBase {
                     if (c == '}' || c == ']') level--;
                     if (c == ',' && level == 0) {
                         tokens.add(current.toString().trim());
-                        current = new StringBuilder();
-                        continue;
+                        current = new StringBuilder(); continue;
                     }
                 }
                 current.append(c);
             }
             if (current.length() > 0) tokens.add(current.toString().trim());
-
-            for (String token : tokens) {
-                if (!token.isEmpty()) list.add(parseMiniSNBT(token));
-            }
+            for (String token : tokens) if (!token.isEmpty()) list.add(parseMiniSNBT(token));
             return list;
         } else {
             if (s.endsWith("b") || s.endsWith("s") || s.endsWith("l") || s.endsWith("f") || s.endsWith("d") ||
