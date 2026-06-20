@@ -1,0 +1,18 @@
+name: NBTLoader
+main: com.tripu1404.nbtloader.NBTLoader
+version: 1.0.0
+api: ["1.0.0"]
+author: Tripu1404
+description: Plugin para cargar kits avanzados desde archivos SNBT/JSON.
+
+commands:
+  givekit:
+    description: "Entrega un kit personalizado desde la carpeta de NBTs"
+    usage: "/givekit <nombre_archivo>"
+    permission: nbtloader.command.givekit
+    permission-message: "§cNo tienes permiso para usar este comando."
+
+permissions:
+  nbtloader.command.givekit:
+    description: "Permite usar el comando /givekit"
+    default: op
