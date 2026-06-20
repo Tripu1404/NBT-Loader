@@ -4,6 +4,7 @@ import cn.nukkit.Player;
 import cn.nukkit.command.Command;
 import cn.nukkit.command.CommandSender;
 import cn.nukkit.item.Item;
+import cn.nukkit.item.enchantment.Enchantment;
 import cn.nukkit.nbt.tag.CompoundTag;
 import cn.nukkit.nbt.tag.ListTag;
 import cn.nukkit.plugin.PluginBase;
@@ -16,8 +17,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class NBTLoader extends PluginBase {
 
@@ -29,7 +28,7 @@ public class NBTLoader extends PluginBase {
             saveResource("nbts/mommys_affection.txt", false);
             saveResource("nbts/Techno kit.txt", false);
         }
-        getLogger().info(TextFormat.GREEN + "NBTLoader optimizado para Kits Avanzados activado. Hecho por Tripu1404.");
+        getLogger().info(TextFormat.GREEN + "NBTLoader para Kits Avanzados activado con soporte Nivel 32767. Hecho por Tripu1404.");
     }
 
     @Override
@@ -68,54 +67,69 @@ public class NBTLoader extends PluginBase {
         }
 
         if (!nbtFile.exists()) {
-            player.sendMessage(TextFormat.RED + "El archivo '" + args[0] + "' no existe en plugins/NBTLoader/nbts/");
+            player.sendMessage(TextFormat.RED + "El archivo '" + args[0] + "' no existe.");
             return true;
         }
 
         try {
-            // 1. LEER EL CONTENIDO PLANO Y SANEARLO DE SINTAXIS SNBT
             String rawContent = new String(Files.readAllBytes(nbtFile.toPath()), StandardCharsets.UTF_8).trim();
             
-            // Reparar errores de formato comunes en kits ilegales (comas dobles o llaves mal cerradas)
             if (rawContent.contains(",,")) rawContent = rawContent.replace(",,", ",");
             if (rawContent.contains(",}")) rawContent = rawContent.replace(",}", "}");
 
-            // 2. PARSEAR MEDIANTE UN MOTOR MINI-SNBT PERSONALIZADO (Evita Gson por completo)
             Object parsedStructure = parseMiniSNBT(rawContent);
             if (!(parsedStructure instanceof Map)) {
-                player.sendMessage(TextFormat.RED + "Error: La raíz del archivo NBT debe ser un objeto compuesto {}.");
+                player.sendMessage(TextFormat.RED + "Error: La raíz del archivo debe ser un objeto compuesto {}.");
                 return true;
             }
 
             @SuppressWarnings("unchecked")
             Map<String, Object> rootMap = (Map<String, Object>) parsedStructure;
 
-            // 3. DETERMINAR EL ID DE LA CAJA SHULKER DINÁMICAMENTE
-            String boxId = "minecraft:shulker_box"; 
+            // 1. DETERMINAR ID Y COLOR CORRECTO DE LA SHULKER BOX
+            String boxId = "minecraft:shulker_box";
+            
             if (rootMap.containsKey("Name")) {
                 boxId = String.valueOf(rootMap.get("Name"));
-            } else if (rootMap.containsKey("Block") && rootMap.get("Block") instanceof Map) {
+            } else if (rootMap.containsKey("Name") == false && rootMap.containsKey("Block") && rootMap.get("Block") instanceof Map) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> blockMap = (Map<String, Object>) rootMap.get("Block");
                 if (blockMap.containsKey("name")) {
                     boxId = String.valueOf(blockMap.get("name"));
                 }
+                // Extraer el color si viene metido en los estados del bloque
+                if (blockMap.containsKey("states") && blockMap.get("states") instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> statesMap = (Map<String, Object>) blockMap.get("states");
+                    if (statesMap.containsKey("color")) {
+                        String colorStr = String.valueOf(statesMap.get("color")).replace("\"", "");
+                        boxId = "minecraft:" + colorStr + "_shulker_box";
+                    }
+                }
             } else if (rootMap.containsKey("states") && rootMap.get("states") instanceof Map) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> statesMap = (Map<String, Object>) rootMap.get("states");
                 if (statesMap.containsKey("color")) {
-                    boxId = "minecraft:" + String.valueOf(statesMap.get("color")).replace("\"", "") + "_shulker_box";
+                    String colorStr = String.valueOf(statesMap.get("color")).replace("\"", "");
+                    boxId = "minecraft:" + colorStr + "_shulker_box";
                 }
             }
 
-            // Instanciar ítem base
+            // Forzar traducción si el archivo dice "shulker_box" plano pero contiene estados de color sueltos
+            if (boxId.equals("minecraft:shulker_box") || boxId.equals("minecraft:undyed_shulker_box")) {
+                String contentLower = rawContent.toLowerCase();
+                if (contentLower.contains("color:\"lime\"") || contentLower.contains("color:lime")) boxId = "minecraft:lime_shulker_box";
+                else if (contentLower.contains("color:\"pink\"") || contentLower.contains("color:pink")) boxId = "minecraft:pink_shulker_box";
+                else if (contentLower.contains("color:\"green\"") || contentLower.contains("color:green")) boxId = "minecraft:green_shulker_box";
+                else if (contentLower.contains("color:\"brown\"") || contentLower.contains("color:brown")) boxId = "minecraft:brown_shulker_box";
+                else if (contentLower.contains("color:\"yellow\"") || contentLower.contains("color:yellow")) boxId = "minecraft:yellow_shulker_box";
+            }
+
             Item itemToGive = Item.fromString(boxId);
             itemToGive.setCount(1);
 
-            // 4. GENERACIÓN RECURSIVA REAL DE NBT (Corrige el inventario vacío)
+            // 2. EXTRACCIÓN Y TRADUCCIÓN COMPLETA DE SUB-ÍTEMS Y ENCANTAMIENTOS
             CompoundTag finalItemTag = new CompoundTag();
-
-            // Buscar la lista "Items" en la raíz o dentro del nodo "tag"
             List<?> itemsRawList = null;
             Map<String, Object> tagSection = null;
 
@@ -131,7 +145,6 @@ public class NBTLoader extends PluginBase {
             }
 
             if (itemsRawList != null) {
-                // Construimos la lista real usando tags genuinos de Nukkit
                 ListTag<CompoundTag> itemsListTag = new ListTag<>("Items");
                 for (Object element : itemsRawList) {
                     if (element instanceof Map) {
@@ -142,18 +155,17 @@ public class NBTLoader extends PluginBase {
                 }
                 finalItemTag.putList(itemsListTag);
             } else {
-                player.sendMessage(TextFormat.RED + "Error: No se localizó la lista 'Items' en el archivo.");
+                player.sendMessage(TextFormat.RED + "Error: No se localizó la lista 'Items' dentro del archivo.");
                 return true;
             }
 
-            // 5. SECCIÓN COSMÉTICA INTEGRADA SIN EXPLOSIONES DECIMALES
+            // Preservar la sección estética general de la Shulker si existe
             if (tagSection != null) {
                 if (tagSection.containsKey("display") && tagSection.get("display") instanceof Map) {
                     @SuppressWarnings("unchecked")
                     CompoundTag displayTag = convertMapToCompoundTag((Map<String, Object>) tagSection.get("display"));
                     finalItemTag.putCompound("display", displayTag);
                 }
-                // Solución al NumberFormatException usando un lector de números seguro
                 if (tagSection.containsKey("customColor")) {
                     finalItemTag.putInt("customColor", safeParseInt(tagSection.get("customColor")));
                 }
@@ -162,13 +174,12 @@ public class NBTLoader extends PluginBase {
                 }
             }
 
-            // Guardar NBT en el ítem
             itemToGive.setNamedTag(finalItemTag);
 
-            // 6. ENTREGA
+            // 3. ENTRÉGAME EL KITS EN EL INVENTARIO
             if (player.getInventory().canAddItem(itemToGive)) {
                 player.getInventory().addItem(itemToGive);
-                player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' procesado por completo y con inventario lleno.");
+                player.sendMessage(TextFormat.GREEN + "» Kit '" + nbtFile.getName() + "' procesado correctamente (Colores y Encantamientos Fix).");
             } else {
                 player.sendMessage(TextFormat.RED + "No tienes espacio suficiente en tu inventario.");
             }
@@ -181,14 +192,39 @@ public class NBTLoader extends PluginBase {
         return true;
     }
 
-    // --- UTILIDADES DE CONVERSIÓN RECURSIVA ---
-
+    // --- CONVERTIDOR DINÁMICO RECURSIVO CON FIX PARA ENCANTAMIENTOS ---
     private static CompoundTag convertMapToCompoundTag(Map<String, Object> map) {
         CompoundTag compound = new CompoundTag();
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             String key = entry.getKey();
             Object val = entry.getValue();
 
+            // FIX DE ENCANTAMIENTOS: Si procesamos la lista "ench" (encantamientos de Minecraft)
+            if (key.equalsIgnoreCase("ench") && val instanceof List) {
+                ListTag<CompoundTag> enchListTag = new ListTag<>("ench");
+                for (Object enchObj : (List<?>) val) {
+                    if (enchObj instanceof Map) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> enchMap = (Map<String, Object>) enchObj;
+                        
+                        int id = 0;
+                        int lvl = 1;
+                        
+                        if (enchMap.containsKey("id")) id = safeParseInt(enchMap.get("id"));
+                        if (enchMap.containsKey("lvl")) lvl = safeParseInt(enchMap.get("lvl"));
+
+                        // Creamos un compuesto legítimo estructurando id y lvl como tipos numéricos puros de Nukkit
+                        CompoundTag enchEntry = new CompoundTag()
+                                .putShort("id", id)
+                                .putShort("lvl", lvl);
+                        enchListTag.add(enchEntry);
+                    }
+                }
+                compound.putList(enchListTag);
+                continue; // Saltar procesamiento genérico para esta clave
+            }
+
+            // Mapeo recursivo estándar de NBT
             if (val instanceof Map) {
                 @SuppressWarnings("unchecked")
                 CompoundTag subCompound = convertMapToCompoundTag((Map<String, Object>) val);
@@ -220,14 +256,14 @@ public class NBTLoader extends PluginBase {
         if (obj instanceof Number) {
             return ((Number) obj).intValue();
         }
-        String str = String.valueOf(obj).trim();
+        String str = String.valueOf(obj).trim().replaceAll("[bslfdBSLFD]", ""); // Limpiar sufijos SNBT
+        if (str.isEmpty()) return 0;
         if (str.contains(".")) {
             return (int) Double.parseDouble(str);
         }
         return Integer.parseInt(str);
     }
 
-    // Parser manual ultra dinámico que procesa SNBT y JSON con/sin comillas o sufijos numéricos
     private static Object parseMiniSNBT(String s) {
         s = s.trim();
         if (s.startsWith("{")) {
@@ -292,8 +328,8 @@ public class NBTLoader extends PluginBase {
             }
             return list;
         } else {
-            // Limpieza de sufijos numéricos de Minecraft (ej: 64b -> 64, 0s -> 0)
-            if (s.endsWith("b") || s.endsWith("s") || s.endsWith("l") || s.endsWith("f") || s.endsWith("d")) {
+            if (s.endsWith("b") || s.endsWith("s") || s.endsWith("l") || s.endsWith("f") || s.endsWith("d") ||
+                s.endsWith("B") || s.endsWith("S") || s.endsWith("L") || s.endsWith("F") || s.endsWith("D")) {
                 String sub = s.substring(0, s.length() - 1);
                 try { return sub.contains(".") ? Double.parseDouble(sub) : Integer.parseInt(sub); } catch (Exception ignored) {}
             }
